@@ -216,3 +216,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── ML Benchmark Lab — project-specific ──────────────────────────
+# Generated output artefacts (plots, reports, result tables)
+outputs/
+
+# Jupyter notebooks (prototype only; production code lives in src/)
+*.ipynb
+
+# Data files (never commit raw data)
+*.csv
+*.xlsx
+*.parquet
+*.feather

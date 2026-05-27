@@ -1,0 +1,109 @@
+[build-system]
+requires      = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ================================================================
+# PROJECT METADATA
+# ================================================================
+
+[project]
+name        = "ml-benchmark-lab"
+version     = "0.1.0"
+description = "Research-grade machine learning benchmarking and comparison framework."
+readme      = "README.md"
+license     = {text = "MIT"}
+authors     = [{name = "Mahat Ibrahim", email = "mahatibrahim@ihu.edu.tr"}]
+
+requires-python = ">=3.10"
+
+keywords = [
+    "machine-learning",
+    "benchmark",
+    "classification",
+    "hyperparameter-optimization",
+    "cross-validation",
+    "imbalanced-data",
+    "feature-importance",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# ── Runtime dependencies ──────────────────────────────────────────
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.5",
+    "xgboost>=2.0",
+    "imbalanced-learn>=0.11",
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "openpyxl>=3.1",
+    "python-docx>=1.1",
+]
+
+# ── Optional dependency groups ─────────────────────────────────────
+[project.optional-dependencies]
+shap  = ["shap>=0.44"]
+lime  = ["lime>=0.2"]
+optuna = ["optuna>=3.0"]
+bayesian = ["scikit-optimize>=0.9"]
+stats = ["scikit-posthocs>=0.7", "baycomp>=1.0"]
+dev   = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+]
+all   = [
+    "ml-benchmark-lab[shap,lime,optuna,bayesian,stats]",
+]
+
+# ── CLI entry point ────────────────────────────────────────────────
+[project.scripts]
+ml-benchmark = "src.cli:main"
+
+# ================================================================
+# PACKAGE DISCOVERY
+# ================================================================
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+src = ["ROADMAP.md"]
+
+# ================================================================
+# TOOL CONFIGURATION
+# ================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+source  = ["src"]
+omit    = ["src/cli.py"]
+branch  = true
+
+[tool.coverage.report]
+show_missing   = true
+skip_covered   = false
+exclude_lines  = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

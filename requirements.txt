@@ -1,0 +1,27 @@
+# Core numerical and data stack
+numpy>=1.24
+pandas>=2.0
+scipy>=1.11
+
+# Machine learning
+scikit-learn>=1.5
+xgboost>=2.0
+
+# Imbalanced data handling
+imbalanced-learn>=0.11
+
+# Visualisation
+matplotlib>=3.7
+seaborn>=0.12
+
+# Export formats
+openpyxl>=3.1
+python-docx>=1.1
+
+# ── Optional extras (install as needed) ───────────────────────────
+# SHAP explainability:       pip install shap>=0.44
+# LIME explainability:       pip install lime>=0.2
+# Optuna optimization:       pip install optuna>=3.0
+# Bayesian optimization:     pip install scikit-optimize>=0.9
+# Statistical post-hoc:      pip install scikit-posthocs>=0.7
+# Bayesian comparison tests: pip install baycomp>=1.0

@@ -1,10 +1,22 @@
 """
 ml-benchmark-lab
 ================
-Research-grade machine learning benchmarking and comparison framework.
+Research-grade ML benchmarking framework.
+
+Supports classification, regression, unsupervised, and time-series tasks
+with modular evaluation, SHAP explainability, statistical testing, and
+publication-ready export.
 """
 
+__version__ = "0.4.0"
+__author__  = "Mahat Ibrahim"
+__email__   = "mahatibrahim@ihu.edu.tr"
+__license__ = "MIT"
+
+# ── Core pipeline ─────────────────────────────────────────────────
 from src.benchmark import build_results_table, run_benchmark
+
+# ── Configuration ─────────────────────────────────────────────────
 from src.config import (
     DEFAULT_OPTIMIZATION,
     DEFAULT_PATHS,
@@ -17,34 +29,107 @@ from src.config import (
     VALID_SECTIONS,
     get_config,
 )
+
+# ── Data ──────────────────────────────────────────────────────────
 from src.data import load_and_preprocess, load_data, preprocess_data, split_data
-from src.evaluation import compute_classification_metrics, compute_confusion_components
-from src.explainability import compute_permutation_importance, get_feature_importance
+
+# ── Time series ───────────────────────────────────────────────────
+from src.time_series import create_lag_features, create_rolling_features
+
+# ── Models ────────────────────────────────────────────────────────
+from src.models import (
+    CLASSIFICATION_MODELS,
+    REGRESSION_MODELS,
+    TIME_SERIES_MODELS,
+    UNSUPERVISED_MODELS,
+    get_models,
+)
+
+# ── Evaluation ────────────────────────────────────────────────────
+from src.evaluation import (
+    compute_classification_metrics,
+    compute_clustering_metrics,
+    compute_confusion_components,
+    compute_forecast_metrics,
+    compute_pca_metrics,
+    compute_regression_metrics,
+)
+
+# ── Validation ────────────────────────────────────────────────────
+from src.validation import (
+    VALID_STRATEGIES,
+    describe_cv_strategy,
+    expanding_window_split,
+    get_cv_strategy,
+    rolling_window_split,
+    walk_forward_split,
+)
+
+# ── Optimization ──────────────────────────────────────────────────
+from src.optimization import run_grid_search, run_random_search
+
+# ── Imbalance ─────────────────────────────────────────────────────
 from src.imbalance import VALID_STRATEGIES as VALID_SAMPLERS
 from src.imbalance import apply_sampling, get_sampler
-from src.models import get_models
-from src.optimization import run_grid_search, run_random_search
-from src.plots import (
-    add_pr_curve,
-    add_roc_curve,
-    finalize_pr_plot,
-    finalize_roc_plot,
-    init_pr_figure,
-    init_roc_figure,
-    plot_confusion_matrix,
-)
-from src.reporting import export_results_csv, export_results_excel, export_results_word
-from src.stats import run_friedman_test, run_mcnemar_test, run_wilcoxon_test
-from src.validation import VALID_STRATEGIES, describe_cv_strategy, get_cv_strategy
 
-__version__ = "0.1.0"
-__author__  = "Mahat Ibrahim"
+# ── Explainability ────────────────────────────────────────────────
+from src.explainability import (
+    compute_permutation_importance,
+    explain_prediction,
+    get_feature_importance,
+    summarise_shap_importance,
+)
+
+# compute_shap_values requires shap — imported lazily to avoid hard dependency
+def compute_shap_values(*args, **kwargs):
+    """Compute SHAP values. Requires: pip install shap."""
+    from src.explainability import compute_shap_values as _fn
+    return _fn(*args, **kwargs)
+
+# ── Statistics ────────────────────────────────────────────────────
+from src.stats import run_friedman_test, run_mcnemar_test, run_wilcoxon_test
+
+# ── Plots ─────────────────────────────────────────────────────────
+from src.plots import (
+    # Classification
+    plot_confusion_matrix,
+    init_roc_figure, add_roc_curve, finalize_roc_plot,
+    init_pr_figure,  add_pr_curve,  finalize_pr_plot,
+    # Regression
+    plot_actual_vs_predicted,
+    plot_residuals,
+    plot_error_distribution,
+    # Unsupervised
+    plot_cluster_scatter,
+    plot_pca_variance,
+    # Time series
+    plot_forecast,
+    plot_rolling_forecast,
+    plot_residuals_over_time,
+    # SHAP (requires pip install shap for plot_shap_summary)
+    plot_shap_bar,
+    plot_shap_dependence,
+    plot_shap_summary,
+)
+
+# ── Reporting ─────────────────────────────────────────────────────
+from src.reporting import export_results_csv, export_results_excel, export_results_word
+
+# ── Experiment tracking ────────────────────────────────────────────
+from src.experiment import (
+    ExperimentTracker,
+    capture_environment,
+    generate_run_id,
+    set_global_seed,
+)
+
 
 __all__ = [
+    # Version
+    "__version__", "__author__",
     # Core pipeline
-    "run_benchmark",
-    "build_results_table",
-    # Config
+    "run_benchmark", "build_results_table",
+    # Configuration
     "get_config",
     "RANDOM_STATE", "N_JOBS", "TEST_SIZE",
     "DEFAULT_PATHS", "DEFAULT_PLOTTING",
@@ -52,24 +137,43 @@ __all__ = [
     "VALID_SECTIONS",
     # Data
     "load_data", "preprocess_data", "split_data", "load_and_preprocess",
+    # Time series
+    "create_lag_features", "create_rolling_features",
     # Models
     "get_models",
+    "CLASSIFICATION_MODELS", "REGRESSION_MODELS",
+    "UNSUPERVISED_MODELS", "TIME_SERIES_MODELS",
     # Evaluation
     "compute_classification_metrics", "compute_confusion_components",
+    "compute_regression_metrics",
+    "compute_clustering_metrics", "compute_pca_metrics",
+    "compute_forecast_metrics",
     # Validation
     "get_cv_strategy", "describe_cv_strategy", "VALID_STRATEGIES",
+    "walk_forward_split", "rolling_window_split", "expanding_window_split",
     # Optimization
     "run_grid_search", "run_random_search",
     # Imbalance
     "get_sampler", "apply_sampling", "VALID_SAMPLERS",
     # Explainability
     "get_feature_importance", "compute_permutation_importance",
+    "compute_shap_values", "summarise_shap_importance", "explain_prediction",
     # Statistics
     "run_mcnemar_test", "run_wilcoxon_test", "run_friedman_test",
-    # Plots
+    # Plots — classification
     "plot_confusion_matrix",
     "init_roc_figure", "add_roc_curve", "finalize_roc_plot",
     "init_pr_figure",  "add_pr_curve",  "finalize_pr_plot",
+    # Plots — regression
+    "plot_actual_vs_predicted", "plot_residuals", "plot_error_distribution",
+    # Plots — unsupervised
+    "plot_cluster_scatter", "plot_pca_variance",
+    # Plots — time series
+    "plot_forecast", "plot_rolling_forecast", "plot_residuals_over_time",
+    # Plots — SHAP
+    "plot_shap_summary", "plot_shap_bar", "plot_shap_dependence",
     # Reporting
     "export_results_csv", "export_results_excel", "export_results_word",
+    # Experiment tracking
+    "ExperimentTracker", "generate_run_id", "set_global_seed", "capture_environment",
 ]

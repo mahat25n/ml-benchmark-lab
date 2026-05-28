@@ -1,5 +1,5 @@
 [build-system]
-requires      = ["setuptools>=42", "wheel"]
+requires      = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # ================================================================
@@ -8,10 +8,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name        = "ml-benchmark-lab"
-version     = "0.1.0"
-description = "Research-grade machine learning benchmarking and comparison framework."
+version     = "0.2.0"
+description = "Research-grade ML benchmarking framework: classification, regression, unsupervised, SHAP explainability."
 readme      = "README.md"
-license     = {text = "MIT"}
+license     = {file = "LICENSE"}
 authors     = [{name = "Mahat Ibrahim", email = "mahatibrahim@ihu.edu.tr"}]
 
 requires-python = ">=3.10"
@@ -20,21 +20,32 @@ keywords = [
     "machine-learning",
     "benchmark",
     "classification",
+    "regression",
+    "clustering",
+    "unsupervised",
+    "explainability",
+    "shap",
+    "feature-importance",
     "hyperparameter-optimization",
     "cross-validation",
     "imbalanced-data",
-    "feature-importance",
+    "statistical-testing",
+    "reproducibility",
 ]
 
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Typing :: Typed",
 ]
 
 # ── Runtime dependencies ──────────────────────────────────────────
@@ -51,20 +62,40 @@ dependencies = [
     "python-docx>=1.1",
 ]
 
+# ── Project URLs ──────────────────────────────────────────────────
+[project.urls]
+Homepage      = "https://github.com/mahatibrahim/ml-benchmark-lab"
+Repository    = "https://github.com/mahatibrahim/ml-benchmark-lab"
+Issues        = "https://github.com/mahatibrahim/ml-benchmark-lab/issues"
+Changelog     = "https://github.com/mahatibrahim/ml-benchmark-lab/blob/main/CHANGELOG.md"
+
 # ── Optional dependency groups ─────────────────────────────────────
 [project.optional-dependencies]
-shap  = ["shap>=0.44"]
-lime  = ["lime>=0.2"]
-optuna = ["optuna>=3.0"]
-bayesian = ["scikit-optimize>=0.9"]
+
+# SHAP-based model explainability (TreeExplainer, LinearExplainer, KernelExplainer)
+shap = ["shap>=0.44"]
+
+# Advanced statistical post-hoc tests (Nemenyi, Bayesian comparison)
 stats = ["scikit-posthocs>=0.7", "baycomp>=1.0"]
-dev   = [
+
+# Documentation build
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "myst-parser>=2.0",
+]
+
+# Development tools — testing, linting, type checking
+dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
     "ruff>=0.4",
+    "mypy>=1.8",
 ]
-all   = [
-    "ml-benchmark-lab[shap,lime,optuna,bayesian,stats]",
+
+# Everything optional at once
+all = [
+    "ml-benchmark-lab[shap,stats]",
 ]
 
 # ── CLI entry point ────────────────────────────────────────────────
@@ -79,19 +110,29 @@ ml-benchmark = "src.cli:main"
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["ROADMAP.md"]
+src = ["ROADMAP.md", "py.typed"]
 
 # ================================================================
 # TOOL CONFIGURATION
 # ================================================================
 
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+addopts      = "-q"
+markers      = ["integration: slow end-to-end tests (deselect with -m 'not integration')"]
+
 [tool.ruff]
-line-length = 100
+line-length    = 100
 target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
+
+[tool.mypy]
+python_version       = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores  = true
 
 [tool.coverage.run]
 source  = ["src"]

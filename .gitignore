@@ -221,6 +221,9 @@ __marimo__/
 # Generated output artefacts (plots, reports, result tables)
 outputs/
 
+# Example script outputs (auto-generated when running examples/)
+examples/outputs/
+
 # Jupyter notebooks (prototype only; production code lives in src/)
 *.ipynb
 
@@ -229,3 +232,10 @@ outputs/
 *.xlsx
 *.parquet
 *.feather
+
+# Word and PDF reports
+*.docx
+*.pdf
+
+# Packaging marker
+src/py.typed

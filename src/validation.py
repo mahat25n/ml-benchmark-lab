@@ -190,29 +190,128 @@ def describe_cv_strategy(cv):
 
 
 # ================================================================
-# FUTURE: TEMPORAL VALIDATION STRATEGIES  (not yet implemented)
+# TEMPORAL VALIDATION STRATEGIES
 # ================================================================
-#
-# Walk-forward validation:
-#   walk_forward_split(X, y, n_splits, horizon, min_train_size=None)
-#   Each fold trains on all past data and evaluates on the next `horizon`
-#   steps. The training window expands with each fold (expanding window).
-#   Equivalent to TimeSeriesSplit with a fixed test horizon per fold.
-#
-# Rolling window validation:
-#   rolling_window_split(X, y, train_size, test_size, step=1)
-#   Fixed-size training window slides forward `step` observations per fold.
-#   Old data drops out as new data enters -- appropriate when the data
-#   generating process is non-stationary and distant history is uninformative.
-#
-# Expanding window validation:
-#   expanding_window_split(X, y, min_train_size, test_size, step=1)
-#   Training window grows from min_train_size; test window stays fixed.
-#   Equivalent to walk_forward_split without a max_train_size constraint.
-#
-# Nested cross-validation:
-#   nested_cv(outer_cv, inner_cv)
-#   Returns a configured (outer_cv, inner_cv) pair for unbiased evaluation
-#   when hyperparameter search is part of the pipeline. The outer loop
-#   estimates generalisation; the inner loop selects hyperparameters.
-#   Delegates hyperparameter search to optimization.py once that exists.
+
+
+import numpy as _np
+
+
+def walk_forward_split(X, y, n_splits, horizon, min_train_size=None):
+    """
+    Walk-forward (expanding window) cross-validation for time series.
+
+    The training window grows by ``horizon`` steps with each fold.
+    The test window is always exactly ``horizon`` steps.
+    No data is shuffled — temporal order is strictly preserved.
+
+    Parameters
+    ----------
+    X              : array-like of shape (n_samples, n_features)
+    y              : array-like of shape (n_samples,)
+    n_splits       : int    Number of folds.
+    horizon        : int    Number of steps in each test window.
+    min_train_size : int or None
+        Minimum number of training samples for the first fold.
+        Defaults to ``len(X) - n_splits * horizon``.
+
+    Yields
+    ------
+    (train_idx, test_idx) : tuple of np.ndarray
+
+    Raises
+    ------
+    ValueError  When there are not enough samples for the requested splits.
+    """
+    n = len(X)
+    if min_train_size is None:
+        min_train_size = n - n_splits * horizon
+    if min_train_size < 1:
+        raise ValueError(
+            f"walk_forward_split: not enough samples. "
+            f"n={n}, n_splits={n_splits}, horizon={horizon} requires "
+            f"at least {n_splits * horizon + 1} samples."
+        )
+    for i in range(n_splits):
+        train_end  = min_train_size + i * horizon
+        test_start = train_end
+        test_end   = test_start + horizon
+        if test_end > n:
+            break
+        yield _np.arange(train_end), _np.arange(test_start, test_end)
+
+
+def rolling_window_split(X, y, train_size, test_size, step=1):
+    """
+    Rolling (sliding) window cross-validation for time series.
+
+    Fixed-size training window slides forward ``step`` observations per fold.
+    Old data drops out as new data enters — appropriate for non-stationary
+    processes where distant history is uninformative.
+
+    Parameters
+    ----------
+    X          : array-like of shape (n_samples, n_features)
+    y          : array-like of shape (n_samples,)
+    train_size : int    Number of training observations per fold.
+    test_size  : int    Number of test observations per fold.
+    step       : int    Step size between consecutive folds (default 1).
+
+    Yields
+    ------
+    (train_idx, test_idx) : tuple of np.ndarray
+
+    Raises
+    ------
+    ValueError  When ``train_size + test_size > len(X)``.
+    """
+    n = len(X)
+    if train_size + test_size > n:
+        raise ValueError(
+            f"rolling_window_split: train_size + test_size "
+            f"({train_size + test_size}) exceeds n_samples ({n})."
+        )
+    start = 0
+    while start + train_size + test_size <= n:
+        train_idx = _np.arange(start, start + train_size)
+        test_idx  = _np.arange(start + train_size, start + train_size + test_size)
+        yield train_idx, test_idx
+        start += step
+
+
+def expanding_window_split(X, y, min_train_size, test_size, step=1):
+    """
+    Expanding window cross-validation for time series.
+
+    Training window grows from ``min_train_size``; test window stays fixed.
+    Equivalent to walk_forward_split but uses an explicit ``test_size``
+    rather than distributing folds evenly.
+
+    Parameters
+    ----------
+    X              : array-like of shape (n_samples, n_features)
+    y              : array-like of shape (n_samples,)
+    min_train_size : int   Minimum training observations (first fold).
+    test_size      : int   Number of test observations per fold.
+    step           : int   Step between test windows (default 1).
+
+    Yields
+    ------
+    (train_idx, test_idx) : tuple of np.ndarray
+
+    Raises
+    ------
+    ValueError  When ``min_train_size + test_size > len(X)``.
+    """
+    n = len(X)
+    if min_train_size + test_size > n:
+        raise ValueError(
+            f"expanding_window_split: min_train_size + test_size "
+            f"({min_train_size + test_size}) exceeds n_samples ({n})."
+        )
+    test_start = min_train_size
+    while test_start + test_size <= n:
+        train_idx = _np.arange(test_start)
+        test_idx  = _np.arange(test_start, test_start + test_size)
+        yield train_idx, test_idx
+        test_start += step

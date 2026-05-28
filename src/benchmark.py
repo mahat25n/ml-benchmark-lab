@@ -2,6 +2,7 @@ import copy
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
@@ -20,7 +21,13 @@ from sklearn.metrics import (
 
 from src.config import DEFAULT_OPTIMIZATION, DEFAULT_PATHS, DEFAULT_REPORTING, RANDOM_STATE, TEST_SIZE
 from src.data import load_and_preprocess
-from src.evaluation import compute_classification_metrics
+from src.evaluation import (
+    compute_classification_metrics,
+    compute_clustering_metrics,
+    compute_forecast_metrics,
+    compute_pca_metrics,
+    compute_regression_metrics,
+)
 from src.models import get_models
 from src.plots import (
     add_pr_curve,
@@ -31,10 +38,12 @@ from src.plots import (
     init_roc_figure,
     plot_confusion_matrix,
 )
+from src.reporting import export_results_csv, export_results_excel, export_results_word
+from src.time_series import create_lag_features, create_rolling_features
+from src.validation import walk_forward_split
 
-# Tasks with a complete implementation. Raise NotImplementedError for others
-# until regression and unsupervised evaluation modules are ready.
-_SUPPORTED_TASKS = {"classification"}
+# Tasks with a complete implementation. Raise NotImplementedError for others.
+_SUPPORTED_TASKS = {"classification", "regression", "unsupervised", "time_series"}
 
 
 # ================================================================
@@ -152,6 +161,268 @@ def _run_multiclass_classification(name, model, X_train, X_test, y_train, y_test
     return metrics, y_pred
 
 
+def _run_regression(name, model, X_train, X_test, y_train, y_test):
+    """
+    Fit and evaluate one regressor.
+
+    Returns
+    -------
+    metrics : dict   Regression metric suite: MAE, MSE, RMSE, R2, MAPE.
+    y_pred  : ndarray
+    """
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    metrics = compute_regression_metrics(y_test, y_pred)
+    return metrics, y_pred
+
+
+def _run_unsupervised(name, model, X_train):
+    """
+    Fit one unsupervised model and return metrics.
+
+    Clustering models (those with fit_predict) are evaluated with internal
+    metrics. PCA/decomposition models return explained-variance statistics.
+    In both cases the returned dict contains all keys from both schemas so
+    every row in the results table shares the same columns.
+
+    Returns
+    -------
+    metrics : dict   Clustering or PCA metrics with NaN padding.
+    labels  : ndarray or None   Cluster labels; None for PCA.
+    """
+    _nan = float("nan")
+    _CLUSTER_NAN = {
+        "Silhouette": _nan, "Davies-Bouldin": _nan,
+        "Calinski-Harabasz": _nan, "n_clusters": _nan, "n_noise": _nan,
+    }
+    _PCA_NAN = {"n_components": _nan, "cum_explained_variance_pct": _nan}
+
+    is_clustering = hasattr(model, "fit_predict")
+    if is_clustering:
+        labels  = model.fit_predict(X_train)
+        metrics = compute_clustering_metrics(X_train, labels)
+        metrics.update(_PCA_NAN)
+        return metrics, labels
+    else:
+        model.fit(X_train)
+        metrics = compute_pca_metrics(model)
+        metrics.update(_CLUSTER_NAN)
+        return metrics, None
+
+
+# ================================================================
+# SHARED HELPERS
+# ================================================================
+
+
+def _export_results(results_df, out, export_formats, report_title, log, **word_kwargs):
+    """
+    Write results to each requested format.
+
+    Parameters
+    ----------
+    results_df     : pd.DataFrame
+    out            : Path  Output directory (must already exist).
+    export_formats : list[str] or None  Subset of ["csv", "excel", "word"].
+    report_title   : str
+    log            : callable  Progress printer.
+    **word_kwargs  : Forwarded to export_results_word (figure path dicts).
+    """
+    if not export_formats:
+        return
+    log(f"\n[export]  Writing report(s): {export_formats} ...")
+    for fmt in export_formats:
+        if fmt == "csv":
+            p = out / "results.csv"
+            export_results_csv(results_df, p)
+            log(f"  csv   -> {p}")
+        elif fmt == "excel":
+            p = out / "results.xlsx"
+            export_results_excel(results_df, p)
+            log(f"  excel -> {p}")
+        elif fmt == "word":
+            p = out / "results.docx"
+            export_results_word(results_df, p, title=report_title, **word_kwargs)
+            log(f"  word  -> {p}")
+        else:
+            warnings.warn(
+                f"run_benchmark: unknown export format '{fmt}', skipping.",
+                stacklevel=3,
+            )
+
+
+# ================================================================
+# TIME-SERIES RUNNERS
+# ================================================================
+
+
+def _run_time_series_walk_forward(name, model, X, y, splits):
+    """
+    Walk-forward evaluation of one model across all folds.
+
+    For each (train_idx, test_idx) pair the model is deep-copied,
+    fitted on the training slice, and evaluated on the test slice.
+    No data from future folds is used during training.
+
+    Parameters
+    ----------
+    name   : str
+    model  : sklearn estimator (deep-copied per fold to prevent state bleed)
+    X      : np.ndarray  Full lag-feature array (temporal order preserved).
+    y      : np.ndarray  Full target array aligned with X.
+    splits : list of (train_idx, test_idx) tuples
+
+    Returns
+    -------
+    metrics     : dict  Forecast metrics averaged across folds + n_folds key.
+    fold_results: list of (y_true_fold, y_pred_fold) ndarrays.
+    """
+    _nan_metrics = {"MAE": float("nan"), "RMSE": float("nan"),
+                    "MAPE": float("nan"), "SMAPE": float("nan"), "n_folds": 0}
+
+    if not splits:
+        return _nan_metrics, []
+
+    fold_metrics = []
+    fold_results = []
+
+    for train_idx, test_idx in splits:
+        fold_model = copy.deepcopy(model)
+        fold_model.fit(X[train_idx], y[train_idx])
+        y_pred_fold = fold_model.predict(X[test_idx])
+        y_true_fold = y[test_idx]
+        fold_results.append((y_true_fold, y_pred_fold))
+        fold_metrics.append(compute_forecast_metrics(y_true_fold, y_pred_fold))
+
+    keys = list(fold_metrics[0].keys())
+    avg_metrics = {}
+    for k in keys:
+        vals = [m[k] for m in fold_metrics if not np.isnan(m[k])]
+        avg_metrics[k] = float(np.mean(vals)) if vals else float("nan")
+    avg_metrics["n_folds"] = len(fold_metrics)
+
+    return avg_metrics, fold_results
+
+
+def _run_time_series_pipeline(
+    csv_path, target_col, out, models_dict, *,
+    lags, rolling_windows, ts_n_splits, ts_horizon,
+    na_values, scaler, sort_by, round_digits,
+    export_formats, report_title, log, verbose,
+    tracker=None,
+):
+    """
+    Full time-series benchmark: load -> feature engineering ->
+    walk-forward CV -> plots -> (export).
+
+    Called by run_benchmark when task="time_series". Returns the same
+    (results_df, preprocessor) tuple as the other task runners.
+    """
+    from src.data import load_data, preprocess_data
+    from src.plots import plot_forecast, plot_rolling_forecast, plot_residuals_over_time
+
+    log(f"[data]    Loading: {csv_path}")
+    df = load_data(csv_path, na_values=na_values)
+
+    # Feature engineering — purely temporal, no future leakage
+    if lags:
+        df = create_lag_features(df, lags, target_col)
+    if rolling_windows:
+        df = create_rolling_features(df, rolling_windows, target_col)
+
+    # Encode categoricals; skip scaling so each fold can scale independently
+    X, y, preprocessor = preprocess_data(df, target_col, scaler=False)
+    n = len(X)
+    log(f"[data]    n_samples={n}  features={X.shape[1]}")
+
+    if tracker is not None:
+        tracker.log_dataset(
+            n_samples=n,
+            n_features=X.shape[1],
+            train_size=n,
+            test_size=0,
+            target_col=target_col,
+        )
+
+    # Default models registry for time series
+    if models_dict is None:
+        models_dict = dict(get_models("time_series"))
+    else:
+        models_dict = dict(models_dict)
+
+    # Walk-forward splits
+    horizon = ts_horizon if ts_horizon is not None else max(1, n // (ts_n_splits + 1))
+    try:
+        splits = list(walk_forward_split(X, y, ts_n_splits, horizon))
+    except ValueError as exc:
+        raise ValueError(f"run_benchmark(task='time_series'): {exc}") from exc
+
+    if not splits:
+        raise ValueError(
+            f"run_benchmark(task='time_series'): no splits generated. "
+            f"n_samples={n}, ts_n_splits={ts_n_splits}, horizon={horizon}."
+        )
+    log(f"[splits]  {len(splits)} fold(s), horizon={horizon}")
+
+    if tracker is not None:
+        tracker.log_config(ts_n_splits=len(splits), ts_horizon=horizon)
+
+    # Per-model loop
+    results        = []
+    forecast_paths = {}
+
+    if tracker is not None:
+        tracker.log_models(list(models_dict.keys()))
+
+    log(f"[models]  Running {len(models_dict)} model(s) ...")
+    for name, model in models_dict.items():
+        log(f"  {name:<30}")
+        metrics, fold_results = _run_time_series_walk_forward(name, model, X, y, splits)
+        results.append({"Model": name, **metrics})
+
+        if fold_results:
+            y_true_all = np.concatenate([r[0] for r in fold_results])
+            y_pred_all = np.concatenate([r[1] for r in fold_results])
+            safe = name.replace(" ", "_")
+
+            fc_path = out / f"forecast_{safe}.png"
+            plot_forecast(y_true_all, y_pred_all, name, fc_path)
+            forecast_paths[name] = fc_path
+
+            plot_rolling_forecast(fold_results, name, out / f"rolling_forecast_{safe}.png")
+            plot_residuals_over_time(y_true_all, y_pred_all, name,
+                                     out / f"res_time_{safe}.png")
+
+            mae  = metrics.get("MAE",  float("nan"))
+            rmse = metrics.get("RMSE", float("nan"))
+            log(
+                f"    mae={mae:.4f}  rmse={rmse:.4f}  "
+                f"folds={metrics.get('n_folds', 0)}"
+            )
+
+    results_df = build_results_table(results, sort_by=sort_by, round_digits=round_digits)
+
+    log("\n[results]")
+    if verbose:
+        print(results_df.to_string(index=False))
+
+    _export_results(
+        results_df, out, export_formats, report_title, log,
+        forecast_paths=forecast_paths or None,
+    )
+
+    if tracker is not None:
+        tracker.log_metrics(results_df)
+        tracker.save()
+        preprocessor["experiment"] = {
+            "run_id":  tracker.run_id,
+            "run_dir": str(tracker.run_dir),
+        }
+        log(f"[track]   Run saved: {tracker.run_dir}")
+
+    return results_df, preprocessor
+
+
 # ================================================================
 # PUBLIC API
 # ================================================================
@@ -214,6 +485,13 @@ def run_benchmark(
     # ── Optional: report export ────────────────────────────────────
     export_formats=None,
     report_title=DEFAULT_REPORTING["word_title"],
+    # ── Optional: time-series configuration ───────────────────────
+    lags=None,
+    rolling_windows=None,
+    ts_n_splits=5,
+    ts_horizon=None,
+    # ── Optional: experiment tracking ─────────────────────────────
+    experiment_name=None,
 ):
     """
     Full benchmark pipeline: load → preprocess → (imbalance) → (optimize) →
@@ -229,7 +507,7 @@ def run_benchmark(
     target_col      : str            Target column name. Never hardcoded.
     output_dir      : str or Path    Directory where all output files are saved.
     models_dict     : dict or None   {name: estimator}. Defaults to get_models(task).
-    task            : str            "classification" (regression/unsupervised: future).
+    task            : str            One of "classification", "regression", "unsupervised", "time_series".
     test_size       : float          Held-out test fraction.
     random_state    : int
     stratify        : bool           Stratify split by y. Set False for regression.
@@ -280,6 +558,13 @@ def run_benchmark(
     report_title    : str
         Title heading for the Word report.
 
+    experiment_name : str or None
+        When provided, activates experiment tracking. A run directory is
+        created at ``<output_dir>/experiments/<experiment_name>/<run_id>/``
+        and four artifact files are written: config.json, metrics.csv,
+        environment.txt, experiment_summary.json.
+        When None (default), no tracking is performed.
+
     Returns
     -------
     results_df   : pd.DataFrame
@@ -288,12 +573,38 @@ def run_benchmark(
         Fitted encoders and scaler from preprocess_data.
         When compute_importance=True, also contains key "importance":
         {model_name: pd.DataFrame} with ranked feature importance.
+        When experiment_name is set, also contains key "experiment":
+        {"run_id": str, "run_dir": str}.
     """
     if task not in _SUPPORTED_TASKS:
         raise NotImplementedError(
             f"task='{task}' is not yet implemented. "
             f"Supported tasks: {sorted(_SUPPORTED_TASKS)}"
         )
+
+    # ── Experiment tracker (opt-in) ────────────────────────────────────────
+    tracker = None
+    if experiment_name is not None:
+        from src.experiment import ExperimentTracker
+        tracker = ExperimentTracker(experiment_name, base_dir=output_dir)
+        tracker.log_config(
+            task=task,
+            random_state=random_state,
+            test_size=test_size,
+            stratify=stratify,
+            imbalance_strategy=imbalance_strategy,
+            optimize_method=optimize_method if optimize else None,
+            n_models_optimized=len(optimize) if optimize else 0,
+        )
+
+    # These tasks don't support stratified splitting.
+    if task in ("regression", "unsupervised", "time_series") and stratify:
+        warnings.warn(
+            f"run_benchmark: stratify=True is not valid for {task} tasks. "
+            "Setting stratify=False automatically.",
+            stacklevel=2,
+        )
+        stratify = False
 
     def _log(msg):
         if verbose:
@@ -302,6 +613,25 @@ def run_benchmark(
     # ── Output directory ───────────────────────────────────────────────────
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    # ── Time-series task — separate pipeline, returns early ────────────────
+    if task == "time_series":
+        return _run_time_series_pipeline(
+            csv_path, target_col, out, models_dict,
+            lags=lags,
+            rolling_windows=rolling_windows,
+            ts_n_splits=ts_n_splits,
+            ts_horizon=ts_horizon,
+            na_values=na_values,
+            scaler=scaler,
+            sort_by=sort_by,
+            round_digits=round_digits,
+            export_formats=export_formats,
+            report_title=report_title,
+            log=_log,
+            verbose=verbose,
+            tracker=tracker,
+        )
 
     # ── Data ───────────────────────────────────────────────────────────────
     _log(f"[data]    Loading: {csv_path}")
@@ -314,16 +644,28 @@ def run_benchmark(
         random_state=random_state,
         stratify=stratify,
     )
-    n_classes = preprocessor["n_classes"]
+    n_classes    = preprocessor["n_classes"]
+    task_is_reg  = (task == "regression")
+    task_is_unsup = (task == "unsupervised")
     _log(
         f"[data]    train={X_train.shape}  test={X_test.shape}  "
-        f"classes={n_classes}  features={len(preprocessor['feature_names'])}"
+        + (f"classes={n_classes}  " if task == "classification" else "")
+        + f"features={len(preprocessor['feature_names'])}"
     )
+
+    if tracker is not None:
+        tracker.log_dataset(
+            n_samples=X_train.shape[0] + X_test.shape[0],
+            n_features=X_train.shape[1],
+            train_size=X_train.shape[0],
+            test_size=X_test.shape[0],
+            target_col=target_col,
+        )
 
     # Combined ROC/PR curves are only valid for binary classification.
     # Multiclass requires OvR decomposition — deferred to a future release.
-    is_binary = n_classes == 2
-    if not is_binary:
+    is_binary = (n_classes == 2) and (task == "classification")
+    if task == "classification" and not is_binary:
         warnings.warn(
             f"n_classes={n_classes}: combined ROC and PR curve plots require binary targets. "
             "Curve plots will be skipped. Per-model confusion matrices will still be saved. "
@@ -337,6 +679,9 @@ def run_benchmark(
         models_dict = dict(get_models(task))
     else:
         models_dict = dict(models_dict)
+
+    if tracker is not None:
+        tracker.log_models(list(models_dict.keys()))
 
     # ── Optional: imbalance handling ───────────────────────────────────────
     if imbalance_strategy is not None:
@@ -403,6 +748,12 @@ def run_benchmark(
         fig_pr,  ax_pr  = init_pr_figure()
         pr_baseline = float(y_test.mean())  # positive-class prevalence for PR baseline
 
+    # Per-model figure paths; populated in the model loop.
+    scatter_paths  = {}  # {name: Path}  actual vs predicted  (regression)
+    residual_paths = {}  # {name: Path}  residuals            (regression)
+    cluster_paths  = {}  # {name: Path}  cluster scatter      (unsupervised)
+    pca_paths      = {}  # {name: Path}  PCA variance         (unsupervised)
+
     # ── Per-model loop ─────────────────────────────────────────────────────
     results = []
 
@@ -410,7 +761,13 @@ def run_benchmark(
     for name, model in models_dict.items():
         _log(f"  {name:<30}")
 
-        if is_binary:
+        if task_is_unsup:
+            metrics, labels = _run_unsupervised(name, model, X_train)
+        elif task_is_reg:
+            metrics, y_pred = _run_regression(
+                name, model, X_train, X_test, y_train, y_test
+            )
+        elif is_binary:
             metrics, y_pred = _run_binary_classification(
                 name, model, X_train, X_test, y_train, y_test, ax_roc, ax_pr
             )
@@ -418,24 +775,53 @@ def run_benchmark(
             metrics, y_pred = _run_multiclass_classification(
                 name, model, X_train, X_test, y_train, y_test
             )
-        # Future task routing slots in here:
-        # elif task == "regression":
-        #     metrics, y_pred = _run_regression(name, model, X_train, X_test, y_train, y_test)
-        # elif task == "unsupervised":
-        #     metrics = _run_unsupervised(name, model, X_train, X_test)
-        #     y_pred = None
 
         results.append({"Model": name, **metrics})
 
-        # Confusion matrix — common to all supervised tasks
-        cm = confusion_matrix(y_test, y_pred)
-        plot_confusion_matrix(cm, name, out / f"cm_{name.replace(' ', '_')}.png")
-
-        _log(
-            f"    acc={metrics['Accuracy']:.4f}  "
-            f"auc={metrics['ROC AUC']:.4f}  "
-            f"f1={metrics['F1 Score']:.4f}"
-        )
+        safe = name.replace(" ", "_")
+        if task_is_unsup:
+            from src.plots import plot_cluster_scatter, plot_pca_variance
+            is_clustering = labels is not None
+            if is_clustering:
+                cs_path = out / f"cluster_{safe}.png"
+                plot_cluster_scatter(
+                    X_train, labels, name, cs_path,
+                    feature_names=preprocessor["feature_names"],
+                )
+                cluster_paths[name] = cs_path
+                _log(
+                    f"    n_clusters={metrics.get('n_clusters')}  "
+                    f"silhouette={metrics.get('Silhouette')}"
+                )
+            else:
+                pv_path = out / f"pca_{safe}.png"
+                plot_pca_variance(model, name, pv_path)
+                pca_paths[name] = pv_path
+                _log(
+                    f"    n_components={metrics.get('n_components')}  "
+                    f"cum_var%={metrics.get('cum_explained_variance_pct'):.2f}"
+                )
+        elif task_is_reg:
+            from src.plots import plot_actual_vs_predicted, plot_residuals
+            avp_path = out / f"avp_{safe}.png"
+            res_path = out / f"res_{safe}.png"
+            plot_actual_vs_predicted(y_test, y_pred, name, avp_path)
+            plot_residuals(y_test, y_pred, name, res_path)
+            scatter_paths[name]  = avp_path
+            residual_paths[name] = res_path
+            _log(
+                f"    mae={metrics['MAE']:.4f}  "
+                f"r2={metrics['R2']:.4f}  "
+                f"rmse={metrics['RMSE']:.4f}"
+            )
+        else:
+            cm = confusion_matrix(y_test, y_pred)
+            plot_confusion_matrix(cm, name, out / f"cm_{name.replace(' ', '_')}.png")
+            _log(
+                f"    acc={metrics['Accuracy']:.4f}  "
+                f"auc={metrics['ROC AUC']:.4f}  "
+                f"f1={metrics['F1 Score']:.4f}"
+            )
 
     # ── Finalise combined plots ────────────────────────────────────────────
     if fig_roc:
@@ -449,6 +835,16 @@ def run_benchmark(
     _log("\n[results]")
     if verbose:
         print(results_df.to_string(index=False))
+
+    # ── Optional: experiment tracking ─────────────────────────────────────
+    if tracker is not None:
+        tracker.log_metrics(results_df)
+        tracker.save()
+        preprocessor["experiment"] = {
+            "run_id":  tracker.run_id,
+            "run_dir": str(tracker.run_dir),
+        }
+        _log(f"[track]   Run saved: {tracker.run_dir}")
 
     # ── Optional: feature importance ───────────────────────────────────────
     if compute_importance:
@@ -476,71 +872,35 @@ def run_benchmark(
             preprocessor["importance"] = importance_results
 
     # ── Optional: report export ────────────────────────────────────────────
-    if export_formats:
-        from src.reporting import export_results_csv, export_results_excel, export_results_word
-        _log(f"\n[export]  Writing report(s): {export_formats} ...")
-        for fmt in export_formats:
-            if fmt == "csv":
-                p = out / "results.csv"
-                export_results_csv(results_df, p)
-                _log(f"  csv   -> {p}")
-            elif fmt == "excel":
-                p = out / "results.xlsx"
-                export_results_excel(results_df, p)
-                _log(f"  excel -> {p}")
-            elif fmt == "word":
-                p        = out / "results.docx"
-                roc_path = out / "roc_curve.png"
-                pr_path  = out / "pr_curve.png"
-                cm_paths = {
-                    n: out / f"cm_{n.replace(' ', '_')}.png"
-                    for n in models_dict
-                }
-                export_results_word(
-                    results_df, p,
-                    title=report_title,
-                    roc_path=roc_path if is_binary and roc_path.exists() else None,
-                    pr_path=pr_path   if is_binary and pr_path.exists()  else None,
-                    cm_paths=cm_paths,
-                )
-                _log(f"  word  -> {p}")
-            else:
-                warnings.warn(
-                    f"run_benchmark: unknown export format '{fmt}', skipping.",
-                    stacklevel=2,
-                )
+    roc_path = out / "roc_curve.png"
+    pr_path  = out / "pr_curve.png"
+    cm_paths_word = {
+        m: out / f"cm_{m.replace(' ', '_')}.png"
+        for m in models_dict
+    }
+    _export_results(
+        results_df, out, export_formats, report_title, _log,
+        roc_path=roc_path        if is_binary and roc_path.exists() else None,
+        pr_path=pr_path          if is_binary and pr_path.exists()  else None,
+        cm_paths=cm_paths_word   if task == "classification"         else None,
+        scatter_paths=scatter_paths   if task_is_reg  else None,
+        residual_paths=residual_paths if task_is_reg  else None,
+        cluster_paths=cluster_paths   if task_is_unsup else None,
+        pca_paths=pca_paths           if task_is_unsup else None,
+    )
 
     return results_df, preprocessor
 
 
 # ================================================================
-# FUTURE TASK RUNNERS  (not yet implemented)
-# All runners follow the same contract: (name, model, X_train, X_test,
-# y_train, y_test, **task_kwargs) → (metrics_dict, y_pred or None)
+# FUTURE ORCHESTRATION
 # ================================================================
 #
-# def _run_regression(name, model, X_train, X_test, y_train, y_test):
-#     → evaluation.compute_regression_metrics()
-#     → plots.plot_residuals(), plots.plot_predicted_vs_actual()
-#
-# def _run_unsupervised(name, model, X_train, X_test):
-#     → evaluation.compute_clustering_metrics()
-#     → plots.plot_silhouette(), plots.plot_cluster_projection()
-#     → returns (metrics, None)   # no y_pred
-#
-# def _run_time_series(name, model, X_train, X_test, y_train, y_test):
-#     → validation.walk_forward_split() before fit
-#     → evaluation.compute_regression_metrics() or classification metrics
-#
-# ================================================================
-# FUTURE ORCHESTRATION  (not yet implemented)
-# ================================================================
-#
-# Cross-validation mode (future):
+# Cross-validation mode:
 #   run_cv_benchmark(csv_path, target_col, cv_strategy, ...) →
 #       iterates over folds, aggregates per-fold results, returns
 #       mean ± std metric table (no single-split ROC/PR curves)
 #
-# Statistical testing (future stats.py):
+# Statistical testing:
 #   run_statistical_comparison(results_df, test="friedman") →
 #       post-hoc tables, critical difference diagram

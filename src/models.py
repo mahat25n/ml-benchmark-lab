@@ -9,6 +9,16 @@ from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.svm import SVR
+from xgboost import XGBRegressor
+
+from sklearn.cluster import AgglomerativeClustering, DBSCAN, KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import PCA
+
 # ---------------------------------------------------------------------------
 # CLASSIFICATION_MODELS
 # Currently populated with the 8 prototype models from the notebook.
@@ -45,7 +55,6 @@ CLASSIFICATION_MODELS = {
         learning_rate=0.05,
         eval_metric="logloss",
         random_state=42,
-        use_label_encoder=False,
     ),
     "SVM": SVC(
         kernel="rbf",
@@ -67,25 +76,95 @@ CLASSIFICATION_MODELS = {
 
 # ---------------------------------------------------------------------------
 # REGRESSION_MODELS
-# Future targets: Linear Regression, Ridge, Lasso, ElasticNet, SVR,
-# KNN Regressor, Decision Tree Regressor, Random Forest Regressor,
-# Extra Trees Regressor, Gradient Boosting Regressor,
-# HistGradientBoosting Regressor, XGBoost Regressor,
-# LightGBM Regressor, CatBoost Regressor, MLP Regressor.
+# Future targets: Decision Tree Regressor, Extra Trees Regressor,
+# HistGradientBoosting Regressor, LightGBM Regressor,
+# CatBoost Regressor, MLP Regressor, Bayesian Ridge, HuberRegressor.
 # ---------------------------------------------------------------------------
-REGRESSION_MODELS = {}
+REGRESSION_MODELS = {
+    "Linear Regression": LinearRegression(),
+    "Ridge": Ridge(
+        alpha=1.0,
+    ),
+    "Lasso": Lasso(
+        alpha=0.1,
+        random_state=42,
+        max_iter=2000,
+    ),
+    "ElasticNet": ElasticNet(
+        alpha=0.1,
+        l1_ratio=0.5,
+        random_state=42,
+        max_iter=2000,
+    ),
+    "Random Forest": RandomForestRegressor(
+        n_estimators=200,
+        max_depth=8,
+        random_state=42,
+        n_jobs=-1,
+    ),
+    "GradientBoost": GradientBoostingRegressor(
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=3,
+        random_state=42,
+    ),
+    "XGBoost": XGBRegressor(
+        n_estimators=200,
+        max_depth=5,
+        learning_rate=0.05,
+        random_state=42,
+        n_jobs=-1,
+    ),
+    "SVR": SVR(
+        kernel="rbf",
+        C=1.0,
+        epsilon=0.1,
+    ),
+    "KNN": KNeighborsRegressor(
+        n_neighbors=5,
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # UNSUPERVISED_MODELS
-# Future targets: KMeans, Hierarchical Clustering, DBSCAN,
-# Gaussian Mixture Model, PCA, UMAP, t-SNE.
+# Future targets: UMAP, t-SNE, Spectral Clustering, Birch, MiniBatchKMeans.
 # ---------------------------------------------------------------------------
-UNSUPERVISED_MODELS = {}
+UNSUPERVISED_MODELS = {
+    "KMeans": KMeans(n_clusters=3, random_state=42, n_init=10),
+    "Agglomerative": AgglomerativeClustering(n_clusters=3),
+    "DBSCAN": DBSCAN(eps=0.5, min_samples=5),
+    "Gaussian Mixture": GaussianMixture(n_components=3, random_state=42),
+    "PCA": PCA(n_components=2, random_state=42),
+}
+
+# ---------------------------------------------------------------------------
+# TIME_SERIES_MODELS
+# Lag-feature–based forecasters; use these with create_lag_features() to
+# convert a time series into a supervised regression problem before fitting.
+# Future targets: LightGBM, CatBoost, LSTM (via scikit-learn wrapper).
+# ---------------------------------------------------------------------------
+TIME_SERIES_MODELS = {
+    "Linear Regression": LinearRegression(),
+    "Random Forest": RandomForestRegressor(
+        n_estimators=100,
+        max_depth=5,
+        random_state=42,
+        n_jobs=-1,
+    ),
+    "XGBoost": XGBRegressor(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.1,
+        random_state=42,
+        n_jobs=-1,
+    ),
+}
 
 _REGISTRY = {
     "classification": CLASSIFICATION_MODELS,
     "regression": REGRESSION_MODELS,
     "unsupervised": UNSUPERVISED_MODELS,
+    "time_series": TIME_SERIES_MODELS,
 }
 
 

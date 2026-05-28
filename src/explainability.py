@@ -279,44 +279,292 @@ def compute_permutation_importance(
 
 
 # ================================================================
-# FUTURE: SHAP-BASED EXPLAINABILITY  (not yet implemented)
+# SHAP-BASED EXPLAINABILITY
 # ================================================================
-#
-# All planned SHAP functions operate on fitted models and return either
-# a raw SHAP values array or a tidy DataFrame for downstream analysis.
-# Plots are intentionally separated into plots.py (future extension).
-# Requires: pip install shap
-#
-# compute_shap_values(model, X, feature_names=None, *, explainer="auto")
-#   "auto" selects TreeExplainer for tree-based models, LinearExplainer
-#   for linear models, and KernelExplainer as the model-agnostic fallback.
-#   Returns a DataFrame (n_samples × n_features) of raw SHAP values.
-#   Signed values encode direction: positive SHAP pushes prediction higher,
-#   negative SHAP pushes prediction lower.
-#   Enables downstream positive/negative contribution analysis per sample.
-#
-# summarise_shap_importance(shap_df, feature_names=None)
-#   Aggregates raw SHAP values into a global feature importance table.
-#   Returns DataFrame with columns: feature, mean_abs_shap, mean_shap,
-#   positive_mean, negative_mean — supporting directional impact analysis.
-#   positive_mean / negative_mean decompose each feature's average
-#   contribution into the share that helps vs. hurts predictions.
-#
-# Planned plot hooks in plots.py (not implemented here):
-#
-#   plot_shap_summary(shap_df, X, feature_names)
-#       Beeswarm plot: one dot per sample, x-axis = SHAP value,
-#       colour = feature value. Shows direction, magnitude, and
-#       feature-value correlation simultaneously.
-#
-#   plot_shap_beeswarm(shap_df, X, feature_names, *, max_display=20)
-#       Ranked beeswarm sorted by mean abs SHAP. Industry standard for
-#       communicating global feature impact to non-technical stakeholders.
-#
-#   plot_shap_dependence(shap_df, X, feature, interaction_feature=None)
-#       SHAP dependence plot: scatter of feature value vs. SHAP value.
-#       Reveals non-linear effects and interaction structure.
-#
+
+
+def _require_shap():
+    """Return the shap module, raising ImportError with an install hint if absent."""
+    try:
+        import shap
+        return shap
+    except ImportError:
+        raise ImportError(
+            "SHAP is required for this function. "
+            "Install it with: pip install shap"
+        )
+
+
+def _get_shap_explainer(shap, model, X_background, *, explainer="auto", task="classification"):
+    """
+    Instantiate the appropriate SHAP explainer.
+
+    Selection priority when explainer="auto":
+      1. TreeExplainer  — models with feature_importances_ (RF, GBM, XGBoost, …)
+      2. LinearExplainer — models with coef_ (Ridge, Lasso, LinearRegression, …)
+      3. KernelExplainer — model-agnostic fallback (slow; uses background data)
+
+    Parameters
+    ----------
+    shap         : shap module (already imported)
+    model        : fitted estimator
+    X_background : ndarray  Background / reference data.
+    explainer    : "auto" | "tree" | "linear" | "kernel"
+    task         : "classification" | "regression"
+                   Affects which prediction function KernelExplainer wraps.
+
+    Returns
+    -------
+    (explainer_obj, kind_str)
+    """
+    if explainer == "auto":
+        if hasattr(model, "feature_importances_"):
+            kind = "tree"
+        elif hasattr(model, "coef_"):
+            kind = "linear"
+        else:
+            kind = "kernel"
+    else:
+        kind = str(explainer)
+
+    if kind == "tree":
+        return shap.TreeExplainer(model), "tree"
+
+    elif kind == "linear":
+        try:
+            exp = shap.LinearExplainer(model, X_background)
+        except TypeError:
+            # Newer SHAP API requires a masker object
+            exp = shap.LinearExplainer(
+                model, shap.maskers.Independent(X_background)
+            )
+        return exp, "linear"
+
+    elif kind == "kernel":
+        # Wrap predict_proba[:, 1] for binary classifiers so SHAP values
+        # represent the positive-class probability contribution.
+        if task == "classification" and hasattr(model, "predict_proba"):
+            fn = lambda x: model.predict_proba(x)[:, 1]  # noqa: E731
+        else:
+            fn = model.predict
+        return shap.KernelExplainer(fn, X_background), "kernel"
+
+    else:
+        raise ValueError(
+            f"Unknown explainer '{kind}'. "
+            "Valid options: 'auto', 'tree', 'linear', 'kernel'."
+        )
+
+
+def _normalise_shap_output(raw, n_samples, n_features):
+    """
+    Coerce SHAP output to a 2-D float array of shape (n_samples, n_features).
+
+    Handles:
+    - SHAP Explanation objects (>= 0.40) — extracts .values
+    - list of arrays (tree/linear classifiers): [class_0, class_1, ...]
+    - 3-D arrays (n_samples, n_features, n_classes)
+    - Already 2-D arrays
+
+    For binary classification (2 classes), class-1 SHAP values are returned.
+    For multiclass (>2 classes), the mean absolute SHAP across classes is returned.
+    """
+    # SHAP >= 0.40 Explanation objects
+    if hasattr(raw, "values"):
+        raw = raw.values
+
+    if isinstance(raw, list):
+        if len(raw) == 2:
+            arr = np.asarray(raw[1], dtype=float)        # binary: class 1
+        else:
+            arr = np.mean(                               # multiclass: mean abs
+                np.abs(np.stack(raw, axis=0)), axis=0
+            ).astype(float)
+    else:
+        arr = np.asarray(raw, dtype=float)
+
+    if arr.ndim == 3:                                    # (n_samples, n_features, n_classes)
+        if arr.shape[2] == 2:
+            arr = arr[:, :, 1]
+        else:
+            arr = np.mean(np.abs(arr), axis=2)
+
+    if arr.ndim != 2:
+        arr = arr.reshape(n_samples, n_features)
+
+    return arr
+
+
+def compute_shap_values(
+    model,
+    X,
+    feature_names=None,
+    *,
+    explainer="auto",
+    X_background=None,
+    n_background=50,
+    task="classification",
+):
+    """
+    Compute SHAP values for a fitted model over a dataset.
+
+    Automatically selects TreeExplainer, LinearExplainer, or KernelExplainer
+    based on the model type (when explainer="auto"). KernelExplainer is the
+    universal fallback but is significantly slower than the model-specific
+    alternatives.
+
+    Parameters
+    ----------
+    model         : fitted sklearn-compatible estimator
+    X             : array-like, shape (n_samples, n_features)
+        Samples to explain. Use X_test for generalisation analysis.
+    feature_names : list[str] or None
+        Column names. None generates generic labels.
+    explainer     : "auto" | "tree" | "linear" | "kernel"
+        Explainer type. "auto" selects based on model attributes.
+    X_background  : array-like or None
+        Background/reference data for LinearExplainer and KernelExplainer.
+        When None, a random subsample of X (size n_background) is used.
+    n_background  : int
+        Number of background samples to draw from X when X_background is None.
+        Default 50. Ignored when X_background is provided.
+    task          : "classification" | "regression"
+        Determines which prediction function KernelExplainer wraps.
+        Ignored for TreeExplainer and LinearExplainer.
+
+    Returns
+    -------
+    shap_values : ndarray, shape (n_samples, n_features)
+        SHAP values — positive values increase the prediction, negative
+        values decrease it. For binary classification, these are class-1
+        contributions. For multiclass, mean absolute across classes.
+    explainer_obj : fitted SHAP explainer instance
+        Can be reused for additional calls or introspection.
+
+    Raises
+    ------
+    ImportError  shap is not installed.
+    ValueError   Unknown explainer type.
+    ValueError   feature_names length mismatch.
+    """
+    shap = _require_shap()
+    X_arr = np.asarray(X, dtype=float)
+    n_samples, n_features = X_arr.shape
+    _validate_feature_names(feature_names, n_features)
+
+    if X_background is None:
+        n_bg = min(n_background, n_samples)
+        bg = shap.sample(X_arr, n_bg, random_state=42)
+    else:
+        bg = np.asarray(X_background, dtype=float)
+
+    explainer_obj, _ = _get_shap_explainer(
+        shap, model, bg, explainer=explainer, task=task
+    )
+    raw = explainer_obj.shap_values(X_arr)
+    shap_arr = _normalise_shap_output(raw, n_samples, n_features)
+
+    return shap_arr, explainer_obj
+
+
+def summarise_shap_importance(shap_values, feature_names):
+    """
+    Aggregate raw SHAP values into a global feature importance DataFrame.
+
+    Parameters
+    ----------
+    shap_values   : array-like, shape (n_samples, n_features)
+        Raw SHAP values from compute_shap_values().
+    feature_names : list[str]
+        Feature column names. Length must equal n_features.
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        "rank"          : int    1-based rank by mean_abs_shap (1 = most important)
+        "feature"       : str
+        "mean_abs_shap" : float  Mean |SHAP| across all samples — global importance.
+        "mean_shap"     : float  Mean signed SHAP — overall directional impact.
+        "positive_mean" : float  Mean of positive SHAP values (where SHAP > 0).
+        "negative_mean" : float  Mean of negative SHAP values (where SHAP < 0).
+
+    Sorted by rank ascending (most important feature first).
+    """
+    arr = np.asarray(shap_values, dtype=float)
+    names = list(feature_names)
+
+    pos = np.where(arr > 0, arr, 0.0).mean(axis=0)
+    neg = np.where(arr < 0, arr, 0.0).mean(axis=0)
+
+    df = pd.DataFrame({
+        "feature":       names,
+        "mean_abs_shap": np.abs(arr).mean(axis=0),
+        "mean_shap":     arr.mean(axis=0),
+        "positive_mean": pos,
+        "negative_mean": neg,
+    })
+    return _add_rank(df, "mean_abs_shap")
+
+
+def explain_prediction(
+    model,
+    X_instance,
+    feature_names=None,
+    *,
+    explainer="auto",
+    X_background=None,
+    n_background=50,
+    task="classification",
+):
+    """
+    Explain a single prediction using SHAP values (local explanation).
+
+    Parameters
+    ----------
+    model        : fitted estimator
+    X_instance   : array-like, shape (n_features,) or (1, n_features)
+        The single sample to explain. Accepts both 1-D and 2-D input.
+    feature_names : list[str] or None
+    explainer    : "auto" | "tree" | "linear" | "kernel"
+    X_background : array-like or None
+    n_background : int
+    task         : "classification" | "regression"
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        "rank"          : int    1-based rank by |shap_value|
+        "feature"       : str
+        "feature_value" : float  actual value of the feature for this instance
+        "shap_value"    : float  SHAP contribution (signed)
+        "abs_shap"      : float  magnitude of contribution
+
+    Sorted by rank ascending (largest absolute contributor first).
+    """
+    X_arr = np.asarray(X_instance, dtype=float)
+    if X_arr.ndim == 1:
+        X_arr = X_arr.reshape(1, -1)
+
+    n_features = X_arr.shape[1]
+    names = _validate_feature_names(feature_names, n_features)
+
+    shap_arr, _ = compute_shap_values(
+        model, X_arr, names,
+        explainer=explainer,
+        X_background=X_background,
+        n_background=n_background,
+        task=task,
+    )
+
+    df = pd.DataFrame({
+        "feature":       names,
+        "feature_value": X_arr[0].tolist(),
+        "shap_value":    shap_arr[0].tolist(),
+        "abs_shap":      np.abs(shap_arr[0]).tolist(),
+    })
+    return _add_rank(df, "shap_value")
+
+
 # ================================================================
 # FUTURE: LIME  (not yet implemented)
 # ================================================================
@@ -326,8 +574,6 @@ def compute_permutation_importance(
 #                           num_samples=5000, random_state=42)
 #   Fits a local linear surrogate around a single prediction instance.
 #   Returns a DataFrame with columns: feature, weight, abs_weight.
-#   Signed weights encode local contribution direction.
-#   Use for per-instance "why did the model predict X?" analysis.
 #   Requires: pip install lime
 #
 # ================================================================
@@ -337,10 +583,6 @@ def compute_permutation_importance(
 # compute_partial_dependence(model, X, features, feature_names=None, *,
 #                             grid_resolution=100, kind="average")
 #   Wraps sklearn.inspection.partial_dependence.
-#   kind="average"   → classic PDP (marginalises over all other features)
-#   kind="individual" → ICE curves (one line per sample, reveals heterogeneity)
+#   kind="average"   → classic PDP
+#   kind="individual" → ICE curves
 #   kind="both"       → PDP overlaid on ICE
-#   Returns a dict: {"grid_values": list[array], "pdp_values": array,
-#                    "feature_names": list[str]}
-#   Suitable for numeric and low-cardinality categorical features.
-#   Plots delegated to plots.py (plot_partial_dependence, plot_ice_curves).

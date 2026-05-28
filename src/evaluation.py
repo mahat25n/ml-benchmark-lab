@@ -5,14 +5,20 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     balanced_accuracy_score,
+    calinski_harabasz_score,
     cohen_kappa_score,
     confusion_matrix,
+    davies_bouldin_score,
     f1_score,
     log_loss,
     matthews_corrcoef,
+    mean_absolute_error,
+    mean_squared_error,
     precision_score,
+    r2_score,
     recall_score,
     roc_auc_score,
+    silhouette_score,
 )
 
 
@@ -148,23 +154,212 @@ def train_and_evaluate(name, model, X_train, X_test, y_train, y_test, average="w
 
 
 # ================================================================
-# REGRESSION EVALUATION  (not yet implemented)
-# Future metrics: MAE, MSE, RMSE, R², Adjusted R², MAPE,
-#                 Max Error, Explained Variance Score
+# REGRESSION EVALUATION
 # ================================================================
 
-# def compute_regression_metrics(y_true, y_pred):
-#     raise NotImplementedError
 
-# def train_and_evaluate_regressor(name, model, X_train, X_test, y_train, y_test):
-#     raise NotImplementedError
+def compute_regression_metrics(y_true, y_pred):
+    """
+    Compute a standard regression metric suite.
+
+    Parameters
+    ----------
+    y_true : array-like   Ground-truth continuous values.
+    y_pred : array-like   Predicted continuous values.
+
+    Returns
+    -------
+    dict with keys:
+        "MAE"  : float   Mean Absolute Error
+        "MSE"  : float   Mean Squared Error
+        "RMSE" : float   Root Mean Squared Error
+        "R2"   : float   Coefficient of Determination
+        "MAPE" : float   Mean Absolute Percentage Error (%), NaN when
+                         all y_true values are zero.
+
+    Notes
+    -----
+    MAPE excludes samples where y_true == 0 to avoid division by zero.
+    When all y_true values are zero, MAPE is returned as NaN.
+    """
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+
+    mse = mean_squared_error(y_true_arr, y_pred_arr)
+
+    nonzero = y_true_arr != 0
+    if nonzero.any():
+        mape = float(
+            np.mean(
+                np.abs(
+                    (y_true_arr[nonzero] - y_pred_arr[nonzero]) / y_true_arr[nonzero]
+                )
+            ) * 100
+        )
+    else:
+        warnings.warn(
+            "compute_regression_metrics: all y_true values are zero — "
+            "MAPE cannot be computed and is returned as NaN.",
+            stacklevel=2,
+        )
+        mape = float("nan")
+
+    return {
+        "MAE":  float(mean_absolute_error(y_true_arr, y_pred_arr)),
+        "MSE":  float(mse),
+        "RMSE": float(np.sqrt(mse)),
+        "R2":   float(r2_score(y_true_arr, y_pred_arr)),
+        "MAPE": mape,
+    }
 
 
 # ================================================================
-# UNSUPERVISED EVALUATION  (not yet implemented)
-# Future metrics: Silhouette Score, Davies-Bouldin Index,
-#                 Calinski-Harabasz Index, Adjusted Rand Index
+# UNSUPERVISED EVALUATION
 # ================================================================
 
-# def compute_clustering_metrics(X, labels, y_true=None):
-#     raise NotImplementedError
+
+def compute_clustering_metrics(X, labels):
+    """
+    Compute internal clustering quality metrics.
+
+    DBSCAN noise points (label == -1) are excluded before computing metrics.
+    When fewer than 2 non-noise clusters remain, all metrics are NaN.
+
+    Parameters
+    ----------
+    X      : array-like of shape (n_samples, n_features)
+    labels : array-like of shape (n_samples,)  Cluster label per sample.
+
+    Returns
+    -------
+    dict with keys:
+        "Silhouette"         : float  Higher is better (range -1 to 1).
+        "Davies-Bouldin"     : float  Lower is better (>= 0).
+        "Calinski-Harabasz"  : float  Higher is better (>= 0).
+        "n_clusters"         : int    Number of non-noise clusters found.
+        "n_noise"            : int    Number of noise points (label == -1).
+    """
+    X_arr    = np.asarray(X)
+    labels   = np.asarray(labels)
+    _nan     = float("nan")
+
+    noise_mask   = labels == -1
+    n_noise      = int(noise_mask.sum())
+    X_clean      = X_arr[~noise_mask]
+    labels_clean = labels[~noise_mask]
+    n_clusters   = int(len(np.unique(labels_clean)))
+
+    if n_clusters < 2:
+        return {
+            "Silhouette":        _nan,
+            "Davies-Bouldin":    _nan,
+            "Calinski-Harabasz": _nan,
+            "n_clusters":        n_clusters,
+            "n_noise":           n_noise,
+        }
+
+    return {
+        "Silhouette":        float(_safe_metric(silhouette_score,        X_clean, labels_clean, label="Silhouette")),
+        "Davies-Bouldin":    float(_safe_metric(davies_bouldin_score,    X_clean, labels_clean, label="Davies-Bouldin")),
+        "Calinski-Harabasz": float(_safe_metric(calinski_harabasz_score, X_clean, labels_clean, label="Calinski-Harabasz")),
+        "n_clusters":        n_clusters,
+        "n_noise":           n_noise,
+    }
+
+
+# ================================================================
+# FORECASTING EVALUATION
+# ================================================================
+
+
+def compute_forecast_metrics(y_true, y_pred):
+    """
+    Compute a forecasting metric suite for time-series evaluation.
+
+    Parameters
+    ----------
+    y_true : array-like  Observed values.
+    y_pred : array-like  Model forecasts.
+
+    Returns
+    -------
+    dict with keys:
+        "MAE"   : float   Mean Absolute Error
+        "RMSE"  : float   Root Mean Squared Error
+        "MAPE"  : float   Mean Absolute Percentage Error (%), NaN when
+                          all y_true values are zero.
+        "SMAPE" : float   Symmetric MAPE (%), NaN when all denominators
+                          are zero (both y_true and y_pred are zero).
+
+    Notes
+    -----
+    MAPE excludes samples where y_true == 0.
+    SMAPE = 2 * mean(|y_true - y_pred| / (|y_true| + |y_pred|)) * 100
+    SMAPE excludes samples where both y_true and y_pred are zero.
+    """
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+
+    mse = float(mean_squared_error(y_true_arr, y_pred_arr))
+
+    nonzero = y_true_arr != 0
+    if nonzero.any():
+        mape = float(
+            np.mean(
+                np.abs(
+                    (y_true_arr[nonzero] - y_pred_arr[nonzero]) / y_true_arr[nonzero]
+                )
+            ) * 100
+        )
+    else:
+        warnings.warn(
+            "compute_forecast_metrics: all y_true values are zero — "
+            "MAPE cannot be computed and is returned as NaN.",
+            stacklevel=2,
+        )
+        mape = float("nan")
+
+    denom = np.abs(y_true_arr) + np.abs(y_pred_arr)
+    nonzero_denom = denom != 0
+    if nonzero_denom.any():
+        smape = float(
+            np.mean(
+                2 * np.abs(y_true_arr[nonzero_denom] - y_pred_arr[nonzero_denom])
+                / denom[nonzero_denom]
+            ) * 100
+        )
+    else:
+        warnings.warn(
+            "compute_forecast_metrics: all denominators are zero — "
+            "SMAPE cannot be computed and is returned as NaN.",
+            stacklevel=2,
+        )
+        smape = float("nan")
+
+    return {
+        "MAE":   float(mean_absolute_error(y_true_arr, y_pred_arr)),
+        "RMSE":  float(np.sqrt(mse)),
+        "MAPE":  mape,
+        "SMAPE": smape,
+    }
+
+
+def compute_pca_metrics(pca_model):
+    """
+    Extract summary statistics from a fitted PCA model.
+
+    Parameters
+    ----------
+    pca_model : fitted sklearn PCA instance
+
+    Returns
+    -------
+    dict with keys:
+        "n_components"              : int    Number of components retained.
+        "cum_explained_variance_pct": float  Cumulative explained variance (0–100).
+    """
+    evr = np.asarray(pca_model.explained_variance_ratio_)
+    return {
+        "n_components":               int(len(evr)),
+        "cum_explained_variance_pct": float(evr.sum() * 100),
+    }

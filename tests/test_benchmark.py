@@ -114,7 +114,7 @@ class TestRunBenchmark:
         with pytest.raises(NotImplementedError):
             run_benchmark(
                 tmp_csv, "target",
-                task="regression",
+                task="forecasting",
                 models_dict={"DT": DecisionTreeClassifier(max_depth=3, random_state=42)},
                 output_dir=str(tmp_path),
                 verbose=False,

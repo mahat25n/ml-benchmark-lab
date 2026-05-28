@@ -310,6 +310,11 @@ def run_friedman_test(scores, *, alpha=0.05):
         data = scores.to_numpy(dtype=float)
     else:
         data = np.asarray(scores, dtype=float)
+        if data.ndim != 2:
+            raise ValueError(
+                f"scores must be a 2D array (n_datasets × n_classifiers); "
+                f"received shape {data.shape}."
+            )
         col_names = [f"Classifier_{i}" for i in range(data.shape[1])]
 
     if data.ndim != 2:

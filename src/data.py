@@ -35,9 +35,8 @@ def load_data(csv_path, *, na_values=None, drop_na=True):
     extra = _DEFAULT_NA_VALUES if na_values is None else list(na_values)
     df = pd.read_csv(csv_path, na_values=extra, keep_default_na=True)
     if drop_na:
-        df.dropna(inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    return df
+        df = df.dropna()
+    return df.reset_index(drop=True)
 
 
 # ================================================================

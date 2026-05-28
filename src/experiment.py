@@ -131,10 +131,11 @@ class ExperimentTracker:
         self.run_dir = Path(base_dir) / "experiments" / experiment_name / self.run_id
         self._start_time = time.time()
 
-        self._config  = {}
-        self._dataset = {}
-        self._models  = []
-        self._metrics = None  # pd.DataFrame or None
+        self._config       = {}
+        self._dataset      = {}
+        self._models       = []
+        self._metrics      = None   # pd.DataFrame or None
+        self._optimization = {}     # {model_name: {best_params, best_score, …}}
 
     # ----------------------------------------------------------------
     # Logging helpers
@@ -173,6 +174,28 @@ class ExperimentTracker:
         if isinstance(results_df, pd.DataFrame):
             self._metrics = results_df.copy()
 
+    def log_optimization(self, optimization_results):
+        """
+        Store per-model hyperparameter optimization results.
+
+        Parameters
+        ----------
+        optimization_results : dict
+            {model_name: result_dict} where each result_dict is the output
+            of optimization.optimize_model() and contains at least:
+            best_params, best_score, n_evaluations, search_duration, method.
+        """
+        self._optimization = {
+            name: {
+                "best_params":     res.get("best_params"),
+                "best_score":      res.get("best_score"),
+                "n_evaluations":   res.get("n_evaluations"),
+                "search_duration": res.get("search_duration"),
+                "method":          res.get("method"),
+            }
+            for name, res in optimization_results.items()
+        }
+
     def elapsed_seconds(self):
         """Return wall-clock seconds since tracker was instantiated."""
         return time.time() - self._start_time
@@ -207,6 +230,7 @@ class ExperimentTracker:
             **self._config,
             "dataset":         self._dataset,
             "models":          self._models,
+            "optimization":    self._optimization,
         }
         (self.run_dir / "config.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -234,12 +258,13 @@ class ExperimentTracker:
 
     def _save_summary(self, env):
         payload = {
-            "experiment_name": self.experiment_name,
-            "run_id":          self.run_id,
-            "run_dir":         str(self.run_dir),
-            "elapsed_seconds": round(self.elapsed_seconds(), 3),
-            "dataset":         self._dataset,
-            "models":          self._models,
+            "experiment_name":      self.experiment_name,
+            "run_id":               self.run_id,
+            "run_dir":              str(self.run_dir),
+            "elapsed_seconds":      round(self.elapsed_seconds(), 3),
+            "dataset":              self._dataset,
+            "models":               self._models,
+            "n_models_optimized":   len(self._optimization),
             "framework": {
                 "ml_benchmark_lab": env["packages"].get("ml-benchmark-lab", "unknown"),
                 "python":           env["python_version"].split()[0],

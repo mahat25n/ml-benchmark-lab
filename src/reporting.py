@@ -200,6 +200,7 @@ def export_results_word(
     cluster_paths=None,
     pca_paths=None,
     forecast_paths=None,
+    optimization_results=None,
     figure_width=DEFAULT_REPORTING["figure_width"],
     cm_width=DEFAULT_REPORTING["cm_width"],
 ):
@@ -242,6 +243,10 @@ def export_results_word(
         Per-model PCA variance plot paths (unsupervised). Two per row.
     forecast_paths : dict {model_name: path} or None
         Per-model forecast plot paths (time series). Two per row.
+    optimization_results : dict or None
+        {model_name: result_dict} from optimization.optimize_model().
+        When provided, adds a hyperparameter optimization summary table:
+        Model | Method | Best Score | # Evals | Duration (s) | Best Params.
     figure_width  : float
         Inches width for ROC and PR figures. Default 6.0.
     cm_width     : float
@@ -315,6 +320,26 @@ def export_results_word(
         doc.add_page_break()
         _add_cm_pairs(doc, forecast_paths, cm_width,
                       heading="Forecast Plots")
+
+    # ── Hyperparameter Optimization Summary ───────────────────────────────
+    if optimization_results:
+        doc.add_page_break()
+        doc.add_heading("Hyperparameter Optimization Summary", level=2)
+        rows = []
+        for model_name, res in optimization_results.items():
+            params_str = ", ".join(
+                f"{k}={v}" for k, v in (res.get("best_params") or {}).items()
+            )
+            rows.append({
+                "Model":       model_name,
+                "Method":      res.get("method", ""),
+                "Best Score":  round(float(res.get("best_score", float("nan"))), 4),
+                "# Evals":     res.get("n_evaluations", ""),
+                "Duration (s)": round(float(res.get("search_duration", 0.0)), 1),
+                "Best Params": params_str,
+            })
+        opt_df = pd.DataFrame(rows)
+        _add_word_table(doc, opt_df)
 
     doc.save(out)
 

@@ -310,6 +310,10 @@ def _run_time_series_pipeline(
     na_values, scaler, sort_by, round_digits,
     export_formats, report_title, log, verbose,
     tracker=None,
+    optimize=False,
+    optimization_method="random",
+    search_space=None,
+    n_iter=20,
 ):
     """
     Full time-series benchmark: load -> feature engineering ->
@@ -367,6 +371,51 @@ def _run_time_series_pipeline(
     if tracker is not None:
         tracker.log_config(ts_n_splits=len(splits), ts_horizon=horizon)
 
+    # ── Optional: hyperparameter optimization (time series) ───────────────
+    # Inner CV uses TimeSeriesSplit to respect temporal order.
+    _do_optimize_ts = bool(optimize)
+    if isinstance(optimize, dict) and optimize:
+        _ts_effective_space = dict(optimize)
+    elif _do_optimize_ts and search_space:
+        _ts_effective_space = dict(search_space)
+    else:
+        _ts_effective_space = None
+
+    ts_opt_results = {}
+
+    if _do_optimize_ts:
+        from sklearn.model_selection import TimeSeriesSplit
+        from src.optimization import build_search_space, optimize_model
+        ts_inner_cv = TimeSeriesSplit(n_splits=min(3, max(2, ts_n_splits - 1)))
+        log(f"[optim]   {optimization_method} search (TimeSeriesSplit inner CV) ...")
+        for m_name, model in list(models_dict.items()):
+            if _ts_effective_space is not None:
+                space = _ts_effective_space.get(m_name)
+                if space is None:
+                    continue
+            else:
+                space = build_search_space(m_name, task="time_series")
+                if space is None:
+                    log(f"  {m_name:<30}  [no default search space, skipping]")
+                    continue
+
+            log(f"  {m_name:<30}")
+            opt_result = optimize_model(
+                model, space, X, y,
+                method=optimization_method,
+                cv=ts_inner_cv,
+                n_iter=n_iter,
+                random_state=42,
+            )
+            models_dict[m_name] = opt_result["best_estimator"]
+            ts_opt_results[m_name] = opt_result
+            log(
+                f"    cv_score={opt_result['best_score']:.4f}  "
+                f"n_evals={opt_result['n_evaluations']}  "
+                f"duration={opt_result['search_duration']:.1f}s  "
+                f"params={opt_result['best_params']}"
+            )
+
     # Per-model loop
     results        = []
     forecast_paths = {}
@@ -409,10 +458,13 @@ def _run_time_series_pipeline(
     _export_results(
         results_df, out, export_formats, report_title, log,
         forecast_paths=forecast_paths or None,
+        optimization_results=ts_opt_results if ts_opt_results else None,
     )
 
     if tracker is not None:
         tracker.log_metrics(results_df)
+        if ts_opt_results:
+            tracker.log_optimization(ts_opt_results)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,
@@ -477,8 +529,10 @@ def run_benchmark(
     # ── Optional: CV strategy (inner loop for optimization) ────────
     cv_strategy=None,
     # ── Optional: hyperparameter optimization ──────────────────────
-    optimize=None,
-    optimize_method="random",
+    optimize=False,
+    optimization_method="random",
+    search_space=None,
+    n_iter=20,
     # ── Optional: feature importance ───────────────────────────────
     compute_importance=False,
     importance_method="model",
@@ -534,15 +588,21 @@ def run_benchmark(
         (e.g. "stratified_kfold") or a pre-configured sklearn splitter.
         When None, the optimization default (5-fold integer) is used.
 
-    optimize        : dict or None
-        {model_name: param_grid_or_distributions} mapping.
-        For each entry, runs the chosen search method on that model before
-        the main evaluation loop. The best estimator replaces the original
-        model in models_dict for the rest of the pipeline.
-        Example: {"Random Forest": {"n_estimators": [100, 300], "max_depth": [5, 10]}}
-    optimize_method : "random" | "grid"
-        Search method applied to every entry in optimize.
-        "random" uses RandomizedSearchCV; "grid" uses GridSearchCV.
+    optimize        : bool or dict
+        False / None → no optimization (default).
+        True         → optimize every model in models_dict using built-in
+                       default search spaces (or search_space if provided).
+        dict         → {model_name: param_grid} — backward-compatible form;
+                       treated as optimize=True with an explicit search_space.
+    optimization_method : "random" | "grid"
+        Search method. "random" uses RandomizedSearchCV; "grid" uses
+        GridSearchCV. Default "random".
+    search_space    : dict or None
+        {model_name: param_grid_or_distributions} override. Used when
+        optimize=True to specify custom spaces instead of the defaults.
+        Ignored when optimize is a dict (backward compat).
+    n_iter          : int
+        Number of parameter combinations sampled by random search. Default 20.
 
     compute_importance : bool
         When True, compute feature importance for every model after the
@@ -593,8 +653,8 @@ def run_benchmark(
             test_size=test_size,
             stratify=stratify,
             imbalance_strategy=imbalance_strategy,
-            optimize_method=optimize_method if optimize else None,
-            n_models_optimized=len(optimize) if optimize else 0,
+            optimization_method=optimization_method if optimize else None,
+            n_models_optimized=len(optimize) if isinstance(optimize, dict) else 0,
         )
 
     # These tasks don't support stratified splitting.
@@ -631,6 +691,10 @@ def run_benchmark(
             log=_log,
             verbose=verbose,
             tracker=tracker,
+            optimize=optimize,
+            optimization_method=optimization_method,
+            search_space=search_space,
+            n_iter=n_iter,
         )
 
     # ── Data ───────────────────────────────────────────────────────────────
@@ -710,32 +774,50 @@ def run_benchmark(
             _log(f"[cv]      {type(cv_strategy).__name__} (caller-supplied)")
 
     # ── Optional: hyperparameter optimization ──────────────────────────────
-    if optimize is not None:
-        from src.optimization import run_grid_search, run_random_search
-        opt_fn = run_random_search if optimize_method == "random" else run_grid_search
+    # optimize=False/None  → skip
+    # optimize=True        → use build_search_space() or search_space override
+    # optimize=<dict>      → backward compat; treat as per-model search space
+    _do_optimize = bool(optimize)
+    if isinstance(optimize, dict) and optimize:
+        _effective_space = dict(optimize)          # old API: optimize was the space
+    elif _do_optimize and search_space:
+        _effective_space = dict(search_space)      # new API: explicit override
+    else:
+        _effective_space = None                    # None → build defaults per model
+
+    opt_results = {}  # {model_name: optimize_model() result}
+
+    if _do_optimize:
+        from src.optimization import build_search_space, optimize_model
         _log(
-            f"[optim]   Optimizing {len(optimize)} model(s) "
-            f"via {optimize_method} search (cv={cv_for_search}) ..."
+            f"[optim]   {optimization_method} search  cv={cv_for_search}  "
+            f"n_iter={n_iter} ..."
         )
-        for m_name, param_space in optimize.items():
-            if m_name not in models_dict:
-                warnings.warn(
-                    f"run_benchmark: optimize key '{m_name}' not found in "
-                    "models_dict — skipping.",
-                    stacklevel=2,
-                )
-                continue
+        for m_name, model in list(models_dict.items()):
+            if _effective_space is not None:
+                space = _effective_space.get(m_name)
+                if space is None:
+                    continue  # not in explicit dict — skip this model
+            else:
+                space = build_search_space(m_name, task=task)
+                if space is None:
+                    _log(f"  {m_name:<30}  [no default search space, skipping]")
+                    continue
+
             _log(f"  {m_name:<30}")
-            opt_kwargs = {"cv": cv_for_search}
-            if optimize_method == "random":
-                opt_kwargs["random_state"] = random_state
-            opt_result = opt_fn(
-                models_dict[m_name], param_space, X_train, y_train,
-                **opt_kwargs,
+            opt_result = optimize_model(
+                model, space, X_train, y_train,
+                method=optimization_method,
+                cv=cv_for_search,
+                n_iter=n_iter,
+                random_state=random_state,
             )
             models_dict[m_name] = opt_result["best_estimator"]
+            opt_results[m_name] = opt_result
             _log(
                 f"    cv_score={opt_result['best_score']:.4f}  "
+                f"n_evals={opt_result['n_evaluations']}  "
+                f"duration={opt_result['search_duration']:.1f}s  "
                 f"params={opt_result['best_params']}"
             )
 
@@ -839,6 +921,8 @@ def run_benchmark(
     # ── Optional: experiment tracking ─────────────────────────────────────
     if tracker is not None:
         tracker.log_metrics(results_df)
+        if opt_results:
+            tracker.log_optimization(opt_results)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,
@@ -880,13 +964,14 @@ def run_benchmark(
     }
     _export_results(
         results_df, out, export_formats, report_title, _log,
-        roc_path=roc_path        if is_binary and roc_path.exists() else None,
-        pr_path=pr_path          if is_binary and pr_path.exists()  else None,
-        cm_paths=cm_paths_word   if task == "classification"         else None,
-        scatter_paths=scatter_paths   if task_is_reg  else None,
-        residual_paths=residual_paths if task_is_reg  else None,
-        cluster_paths=cluster_paths   if task_is_unsup else None,
-        pca_paths=pca_paths           if task_is_unsup else None,
+        roc_path=roc_path          if is_binary and roc_path.exists() else None,
+        pr_path=pr_path            if is_binary and pr_path.exists()  else None,
+        cm_paths=cm_paths_word     if task == "classification"         else None,
+        scatter_paths=scatter_paths    if task_is_reg   else None,
+        residual_paths=residual_paths  if task_is_reg   else None,
+        cluster_paths=cluster_paths    if task_is_unsup else None,
+        pca_paths=pca_paths            if task_is_unsup else None,
+        optimization_results=opt_results if opt_results else None,
     )
 
     return results_df, preprocessor

@@ -8,7 +8,7 @@ with modular evaluation, SHAP explainability, statistical testing, and
 publication-ready export.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__  = "Mahat Ibrahim"
 __email__   = "mahatibrahim@ihu.edu.tr"
 __license__ = "MIT"
@@ -66,7 +66,14 @@ from src.validation import (
 )
 
 # ── Optimization ──────────────────────────────────────────────────
-from src.optimization import run_grid_search, run_random_search
+from src.optimization import (
+    DEFAULT_SEARCH_SPACES,
+    build_search_space,
+    optimize_model,
+    run_grid_search,
+    run_random_search,
+    validate_search_space,
+)
 
 # ── Imbalance ─────────────────────────────────────────────────────
 from src.imbalance import VALID_STRATEGIES as VALID_SAMPLERS
@@ -152,6 +159,8 @@ __all__ = [
     "get_cv_strategy", "describe_cv_strategy", "VALID_STRATEGIES",
     "walk_forward_split", "rolling_window_split", "expanding_window_split",
     # Optimization
+    "optimize_model", "build_search_space", "validate_search_space",
+    "DEFAULT_SEARCH_SPACES",
     "run_grid_search", "run_random_search",
     # Imbalance
     "get_sampler", "apply_sampling", "VALID_SAMPLERS",

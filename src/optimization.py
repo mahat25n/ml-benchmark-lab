@@ -1,7 +1,129 @@
+import time
+import warnings
+
 import pandas as pd
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 
 from src.config import DEFAULT_OPTIMIZATION, RANDOM_STATE
+
+
+# ================================================================
+# DEFAULT SEARCH SPACES
+# Lists are compatible with both GridSearchCV and RandomizedSearchCV.
+# Call build_search_space() to get a per-model copy.
+# ================================================================
+
+_SPACES_CLASSIFICATION = {
+    "Decision Tree": {
+        "max_depth":         [None, 5, 10, 15, 20],
+        "min_samples_split": [2, 5, 10],
+        "min_samples_leaf":  [1, 2, 4],
+        "criterion":         ["gini", "entropy"],
+    },
+    "Random Forest": {
+        "n_estimators":      [50, 100, 200, 300],
+        "max_depth":         [None, 5, 10, 15],
+        "min_samples_split": [2, 5, 10],
+        "min_samples_leaf":  [1, 2, 4],
+    },
+    "AdaBoost": {
+        "n_estimators":  [50, 100, 200],
+        "learning_rate": [0.01, 0.1, 0.5, 1.0],
+    },
+    "GradientBoost": {
+        "n_estimators":  [50, 100, 200],
+        "max_depth":     [3, 5, 7],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "subsample":     [0.7, 0.8, 1.0],
+    },
+    "XGBoost": {
+        "n_estimators":    [50, 100, 200],
+        "max_depth":       [3, 5, 7],
+        "learning_rate":   [0.01, 0.05, 0.1, 0.2],
+        "subsample":       [0.7, 0.8, 1.0],
+        "colsample_bytree": [0.7, 0.8, 1.0],
+    },
+    "SVM": {
+        "C":      [0.1, 1.0, 10.0, 100.0],
+        "gamma":  ["scale", "auto", 0.01, 0.1],
+        "kernel": ["rbf", "poly", "sigmoid"],
+    },
+    "KNN": {
+        "n_neighbors": [3, 5, 7, 11, 15],
+        "weights":     ["uniform", "distance"],
+        "metric":      ["euclidean", "manhattan", "minkowski"],
+    },
+    "ANN": {
+        "hidden_layer_sizes": [(32,), (64,), (32, 16), (64, 32)],
+        "activation":         ["relu", "tanh"],
+        "alpha":              [0.0001, 0.001, 0.01],
+    },
+}
+
+_SPACES_REGRESSION = {
+    "Ridge": {
+        "alpha": [0.01, 0.1, 1.0, 10.0, 100.0],
+    },
+    "Lasso": {
+        "alpha": [0.001, 0.01, 0.1, 1.0, 10.0],
+    },
+    "ElasticNet": {
+        "alpha":    [0.001, 0.01, 0.1, 1.0],
+        "l1_ratio": [0.1, 0.3, 0.5, 0.7, 0.9],
+    },
+    "Random Forest": {
+        "n_estimators":      [50, 100, 200, 300],
+        "max_depth":         [None, 5, 10, 15],
+        "min_samples_split": [2, 5, 10],
+        "min_samples_leaf":  [1, 2, 4],
+    },
+    "GradientBoost": {
+        "n_estimators":  [50, 100, 200],
+        "max_depth":     [3, 5, 7],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "subsample":     [0.7, 0.8, 1.0],
+    },
+    "XGBoost": {
+        "n_estimators":    [50, 100, 200],
+        "max_depth":       [3, 5, 7],
+        "learning_rate":   [0.01, 0.05, 0.1, 0.2],
+        "subsample":       [0.7, 0.8, 1.0],
+        "colsample_bytree": [0.7, 0.8, 1.0],
+    },
+    "SVR": {
+        "C":       [0.1, 1.0, 10.0, 100.0],
+        "epsilon": [0.01, 0.1, 0.5],
+        "gamma":   ["scale", "auto"],
+        "kernel":  ["rbf", "poly"],
+    },
+    "KNN": {
+        "n_neighbors": [3, 5, 7, 11, 15],
+        "weights":     ["uniform", "distance"],
+    },
+}
+
+_SPACES_TIME_SERIES = {
+    "Random Forest": {
+        "n_estimators":      [50, 100, 200],
+        "max_depth":         [None, 3, 5, 10],
+        "min_samples_split": [2, 5, 10],
+    },
+    "XGBoost": {
+        "n_estimators":  [50, 100, 200],
+        "max_depth":     [3, 4, 6],
+        "learning_rate": [0.01, 0.05, 0.1],
+    },
+}
+
+# Public registry: task name → search-space dict.
+# Keys must match model names used in CLASSIFICATION_MODELS, REGRESSION_MODELS,
+# TIME_SERIES_MODELS registries in models.py.
+DEFAULT_SEARCH_SPACES = {
+    "classification": _SPACES_CLASSIFICATION,
+    "regression":     _SPACES_REGRESSION,
+    "time_series":    _SPACES_TIME_SERIES,
+    "unsupervised":   {},   # no hyperparameter search for unsupervised models
+}
 
 
 # ================================================================
@@ -39,7 +161,155 @@ def _package_results(search, refit):
 
 
 # ================================================================
-# PUBLIC API
+# PUBLIC API — search-space utilities
+# ================================================================
+
+
+def build_search_space(model_name, task="classification"):
+    """
+    Return the default search space for a named model and task.
+
+    Parameters
+    ----------
+    model_name : str
+        Model registry key (e.g. "Random Forest", "XGBoost").
+    task       : str
+        One of "classification", "regression", "time_series", "unsupervised".
+
+    Returns
+    -------
+    dict  Shallow copy of the default search space, or None when no
+    default exists for this model/task combination.
+
+    Raises
+    ------
+    ValueError  Unknown task name.
+    """
+    if task not in DEFAULT_SEARCH_SPACES:
+        raise ValueError(
+            f"build_search_space: unknown task '{task}'. "
+            f"Valid: {sorted(DEFAULT_SEARCH_SPACES)}"
+        )
+    registry = DEFAULT_SEARCH_SPACES[task]
+    space = registry.get(model_name)
+    return dict(space) if space is not None else None
+
+
+def validate_search_space(model, param_space):
+    """
+    Validate that all keys in param_space are valid parameters of model.
+
+    Uses model.get_params() to determine valid parameter names.
+    Silently passes when get_params() raises (e.g. exotic estimators).
+
+    Parameters
+    ----------
+    model      : sklearn-compatible estimator
+    param_space: dict   Parameter grid or distributions.
+
+    Raises
+    ------
+    ValueError  If any key in param_space is not in model.get_params().
+    """
+    try:
+        valid = set(model.get_params(deep=False).keys())
+    except Exception:
+        return  # can't validate — allow the search to proceed
+
+    invalid = [k for k in param_space if k not in valid]
+    if invalid:
+        raise ValueError(
+            f"validate_search_space: {type(model).__name__} does not "
+            f"accept parameter(s): {invalid}. "
+            f"Valid parameters: {sorted(valid)}"
+        )
+
+
+# ================================================================
+# PUBLIC API — unified optimizer entry point
+# ================================================================
+
+
+def optimize_model(
+    model,
+    param_space,
+    X_train,
+    y_train,
+    method="random",
+    *,
+    cv=DEFAULT_OPTIMIZATION["cv"],
+    scoring=DEFAULT_OPTIMIZATION["scoring"],
+    n_iter=20,
+    n_jobs=DEFAULT_OPTIMIZATION["n_jobs"],
+    random_state=RANDOM_STATE,
+    refit=DEFAULT_OPTIMIZATION["refit"],
+):
+    """
+    Unified entry point for hyperparameter optimization.
+
+    Dispatches to grid or random search and augments the result with
+    runtime metadata: search_duration, n_evaluations, and method.
+
+    Parameters
+    ----------
+    model        : sklearn-compatible estimator (unfitted)
+    param_space  : dict   Parameter grid (lists) or distributions.
+    X_train      : array-like
+    y_train      : array-like
+    method       : "random" | "grid"
+        "random" — RandomizedSearchCV (samples n_iter combinations).
+        "grid"   — GridSearchCV (exhaustive enumeration).
+    cv           : int or sklearn CV splitter   Inner cross-validation.
+    scoring      : str, callable, or None       Optimisation metric.
+    n_iter       : int   Combinations sampled (random search only).
+    n_jobs       : int   Parallel jobs (-1 = all cores).
+    random_state : int   Seed for reproducible random search.
+    refit        : bool  Refit best estimator on full training set.
+
+    Returns
+    -------
+    dict with keys:
+        "best_estimator"  : fitted estimator or None (when refit=False)
+        "best_params"     : dict, best hyperparameter combination
+        "best_score"      : float, mean CV score for best_params
+        "cv_results"      : pd.DataFrame, all evaluated combinations
+        "search_duration" : float, wall-clock seconds for the search
+        "n_evaluations"   : int, number of parameter combinations tried
+        "method"          : str, "random" or "grid"
+
+    Raises
+    ------
+    ValueError  Unknown method name, or invalid param_space keys.
+    """
+    validate_search_space(model, param_space)
+
+    if method not in ("random", "grid"):
+        raise ValueError(
+            f"optimize_model: unknown method '{method}'. Valid: 'random', 'grid'."
+        )
+
+    t0 = time.perf_counter()
+
+    if method == "grid":
+        result = run_grid_search(
+            model, param_space, X_train, y_train,
+            cv=cv, scoring=scoring, n_jobs=n_jobs, refit=refit,
+        )
+    else:
+        result = run_random_search(
+            model, param_space, X_train, y_train,
+            cv=cv, scoring=scoring, n_iter=n_iter,
+            n_jobs=n_jobs, random_state=random_state, refit=refit,
+        )
+
+    result["search_duration"] = round(time.perf_counter() - t0, 3)
+    result["n_evaluations"]   = len(result["cv_results"])
+    result["method"]          = method
+    return result
+
+
+# ================================================================
+# PUBLIC API — low-level search functions
 # ================================================================
 
 
@@ -184,8 +454,9 @@ def run_random_search(
 # ================================================================
 #
 # All planned search functions follow the same return contract as
-# run_grid_search / run_random_search:
-# (best_estimator, best_params, best_score, cv_results)
+# optimize_model() / run_grid_search / run_random_search:
+#   best_estimator, best_params, best_score, cv_results,
+#   search_duration, n_evaluations, method
 #
 # Bayesian Optimization via scikit-optimize:
 #   run_bayesian_search(model, param_space, X_train, y_train, *,
@@ -198,16 +469,10 @@ def run_random_search(
 #                     cv=5, scoring=None, n_trials=100,
 #                     direction="maximize", timeout=None)
 #   param_space_fn(trial) defines the search space using trial.suggest_*.
-#   Pruning, parallelism, and study persistence handled by Optuna internally.
+#   Pruning, parallelism, and study persistence handled by Optuna.
 #   Requires: pip install optuna
 #
-# Hyperopt:
-#   run_hyperopt_search(model, param_space, X_train, y_train, *,
-#                       cv=5, scoring=None, max_evals=100, random_state=42)
-#   param_space uses hp.choice / hp.uniform / hp.loguniform objects.
-#   Requires: pip install hyperopt
-#
-# Nested cross-validation (when optimization.py connects to validation.py):
+# Nested cross-validation:
 #   run_nested_cv(model, param_grid, X, y, *,
 #                 outer_cv, inner_cv, scoring=None, search="grid")
 #   Outer loop estimates generalisation error; inner loop selects params.

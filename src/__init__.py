@@ -8,7 +8,7 @@ with modular evaluation, SHAP explainability, statistical testing, and
 publication-ready export.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __author__  = "Mahat Ibrahim"
 __email__   = "mahatibrahim@ihu.edu.tr"
 __license__ = "MIT"
@@ -94,7 +94,21 @@ def compute_shap_values(*args, **kwargs):
     return _fn(*args, **kwargs)
 
 # ── Statistics ────────────────────────────────────────────────────
-from src.stats import run_friedman_test, run_mcnemar_test, run_wilcoxon_test
+from src.stats import (
+    run_friedman_test,
+    run_mcnemar_test,
+    run_wilcoxon_test,
+    run_paired_ttest,
+    run_corrected_kfold_ttest,
+    compute_confidence_interval,
+    compute_bootstrap_ci,
+    compute_average_ranks,
+    compute_metric_leaderboard,
+    compute_pairwise_comparisons,
+    compute_significance_summary,
+    compute_cd_nemenyi,
+    prepare_cd_diagram_data,
+)
 
 # ── Plots ─────────────────────────────────────────────────────────
 from src.plots import (
@@ -117,6 +131,9 @@ from src.plots import (
     plot_shap_bar,
     plot_shap_dependence,
     plot_shap_summary,
+    # Statistical comparison
+    plot_ranking_bar,
+    plot_confidence_intervals,
 )
 
 # ── Reporting ─────────────────────────────────────────────────────
@@ -167,8 +184,14 @@ __all__ = [
     # Explainability
     "get_feature_importance", "compute_permutation_importance",
     "compute_shap_values", "summarise_shap_importance", "explain_prediction",
-    # Statistics
+    # Statistics — basic
     "run_mcnemar_test", "run_wilcoxon_test", "run_friedman_test",
+    # Statistics — advanced
+    "run_paired_ttest", "run_corrected_kfold_ttest",
+    "compute_confidence_interval", "compute_bootstrap_ci",
+    "compute_average_ranks", "compute_metric_leaderboard",
+    "compute_pairwise_comparisons", "compute_significance_summary",
+    "compute_cd_nemenyi", "prepare_cd_diagram_data",
     # Plots — classification
     "plot_confusion_matrix",
     "init_roc_figure", "add_roc_curve", "finalize_roc_plot",
@@ -181,6 +204,8 @@ __all__ = [
     "plot_forecast", "plot_rolling_forecast", "plot_residuals_over_time",
     # Plots — SHAP
     "plot_shap_summary", "plot_shap_bar", "plot_shap_dependence",
+    # Plots — statistical comparison
+    "plot_ranking_bar", "plot_confidence_intervals",
     # Reporting
     "export_results_csv", "export_results_excel", "export_results_word",
     # Experiment tracking

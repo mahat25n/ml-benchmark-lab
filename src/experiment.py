@@ -136,6 +136,7 @@ class ExperimentTracker:
         self._models       = []
         self._metrics      = None   # pd.DataFrame or None
         self._optimization = {}     # {model_name: {best_params, best_score, …}}
+        self._stats        = {}     # statistical summary from compute_stats
 
     # ----------------------------------------------------------------
     # Logging helpers
@@ -173,6 +174,19 @@ class ExperimentTracker:
         """
         if isinstance(results_df, pd.DataFrame):
             self._metrics = results_df.copy()
+
+    def log_stats(self, stats_summary):
+        """
+        Store statistical comparison summary produced by run_benchmark.
+
+        Parameters
+        ----------
+        stats_summary : dict
+            Arbitrary stats dict (bootstrap CIs, pairwise test results, etc.)
+            as produced by the compute_stats block in run_benchmark.
+        """
+        if isinstance(stats_summary, dict):
+            self._stats = stats_summary
 
     def log_optimization(self, optimization_results):
         """
@@ -231,6 +245,7 @@ class ExperimentTracker:
             "dataset":         self._dataset,
             "models":          self._models,
             "optimization":    self._optimization,
+            "stats_summary":   self._stats,
         }
         (self.run_dir / "config.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -265,6 +280,7 @@ class ExperimentTracker:
             "dataset":              self._dataset,
             "models":               self._models,
             "n_models_optimized":   len(self._optimization),
+            "has_stats_summary":    bool(self._stats),
             "framework": {
                 "ml_benchmark_lab": env["packages"].get("ml-benchmark-lab", "unknown"),
                 "python":           env["python_version"].split()[0],

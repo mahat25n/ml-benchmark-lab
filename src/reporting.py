@@ -201,6 +201,7 @@ def export_results_word(
     pca_paths=None,
     forecast_paths=None,
     optimization_results=None,
+    stats_summary=None,
     figure_width=DEFAULT_REPORTING["figure_width"],
     cm_width=DEFAULT_REPORTING["cm_width"],
 ):
@@ -247,6 +248,10 @@ def export_results_word(
         {model_name: result_dict} from optimization.optimize_model().
         When provided, adds a hyperparameter optimization summary table:
         Model | Method | Best Score | # Evals | Duration (s) | Best Params.
+    stats_summary : dict or None
+        Output of the compute_stats block in run_benchmark. When provided,
+        adds a Statistical Analysis section with a bootstrap CI table:
+        Model | Metric | Mean | 95% CI Lower | 95% CI Upper.
     figure_width  : float
         Inches width for ROC and PR figures. Default 6.0.
     cm_width     : float
@@ -340,6 +345,36 @@ def export_results_word(
             })
         opt_df = pd.DataFrame(rows)
         _add_word_table(doc, opt_df)
+
+    # ── Statistical Analysis ──────────────────────────────────────────────
+    if stats_summary and "bootstrap_ci" in stats_summary:
+        doc.add_page_break()
+        doc.add_heading("Statistical Analysis", level=2)
+        doc.add_heading("Bootstrap Confidence Intervals (95%)", level=3)
+        rows = []
+        for model_name, ci in stats_summary["bootstrap_ci"].items():
+            rows.append({
+                "Model":          model_name,
+                "Metric":         ci.get("metric", ""),
+                "Mean":           round(float(ci.get("mean", float("nan"))), 4),
+                "95% CI Lower":   round(float(ci.get("lower", float("nan"))), 4),
+                "95% CI Upper":   round(float(ci.get("upper", float("nan"))), 4),
+            })
+        if rows:
+            _add_word_table(doc, pd.DataFrame(rows))
+
+        if "mcnemar_pairs" in stats_summary and stats_summary["mcnemar_pairs"]:
+            doc.add_heading("Pairwise McNemar Tests", level=3)
+            pair_rows = []
+            for pair_name, res in stats_summary["mcnemar_pairs"].items():
+                pair_rows.append({
+                    "Comparison":    pair_name,
+                    "chi2":          round(float(res.get("statistic", float("nan"))), 4),
+                    "p-value":       round(float(res.get("p_value", float("nan"))), 4),
+                    "n_discordant":  res.get("n_discordant", ""),
+                })
+            if pair_rows:
+                _add_word_table(doc, pd.DataFrame(pair_rows))
 
     doc.save(out)
 

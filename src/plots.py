@@ -581,6 +581,83 @@ def plot_shap_dependence(shap_values, X, feature_names, feature, name, save_path
 
 
 # ================================================================
+# STATISTICAL COMPARISON PLOTS
+# ================================================================
+
+
+def plot_ranking_bar(avg_ranks, title, save_path):
+    """
+    Horizontal bar chart of average classifier ranks (lower = better).
+
+    Parameters
+    ----------
+    avg_ranks : pd.Series   avg_rank per classifier, sorted ascending (best first).
+    title     : str
+    save_path : str or Path
+    """
+    ranks = avg_ranks.sort_values(ascending=False)  # worst at top, best at bottom
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    bars = ax.barh(range(len(ranks)), ranks.values, alpha=0.8)
+
+    # Colour best bar differently
+    if len(bars) > 0:
+        bars[-1].set_color("steelblue")
+
+    ax.set_yticks(range(len(ranks)))
+    ax.set_yticklabels(list(ranks.index), fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_xlabel("Average Rank (lower is better)", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.axvline(x=ranks.values.mean(), color="red", linestyle="--",
+               lw=DEFAULT_PLOTTING["line_width"], alpha=0.6, label="Mean rank")
+    ax.legend(fontsize=DEFAULT_PLOTTING["legend_font_size"])
+    ax.grid(True, axis="x", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_confidence_intervals(ci_df, metric, title, save_path):
+    """
+    Point-and-error-bar plot of per-model confidence intervals.
+
+    Parameters
+    ----------
+    ci_df     : pd.DataFrame
+        Must contain columns: Model, mean, lower, upper.
+    metric    : str   Metric name for the x-axis label.
+    title     : str
+    save_path : str or Path
+    """
+    df = ci_df.reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    y_pos   = np.arange(len(df))
+
+    ax.errorbar(
+        df["mean"], y_pos,
+        xerr=[df["mean"] - df["lower"], df["upper"] - df["mean"]],
+        fmt="o",
+        capsize=4,
+        markersize=DEFAULT_PLOTTING["marker_size"],
+        lw=DEFAULT_PLOTTING["line_width"],
+    )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(list(df["Model"]), fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_xlabel(metric, fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.grid(True, axis="x", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+# ================================================================
 # FUTURE PLOTS  (not yet implemented)
 # ================================================================
 #

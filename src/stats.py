@@ -387,36 +387,491 @@ def run_friedman_test(scores, *, alpha=0.05):
 
 
 # ================================================================
-# FUTURE: ADVANCED STATISTICAL TESTS  (not yet implemented)
+# ADVANCED STATISTICAL COMPARISON AND RANKING
+# ================================================================
+
+
+def run_paired_ttest(scores_a, scores_b, *, alternative="two-sided", alpha=0.05):
+    """
+    Paired t-test for two classifiers compared across multiple folds/datasets.
+
+    Parameters
+    ----------
+    scores_a    : array-like, shape (k,)
+    scores_b    : array-like, shape (k,)
+    alternative : {"two-sided", "greater", "less"}
+    alpha       : float
+
+    Returns
+    -------
+    dict with keys: statistic, p_value, df, mean_diff, ci_low, ci_high,
+                    interpretation
+    """
+    a = np.asarray(scores_a, dtype=float)
+    b = np.asarray(scores_b, dtype=float)
+    if a.shape != b.shape:
+        raise ValueError(
+            f"scores_a and scores_b must have the same length. "
+            f"Got {len(a)} and {len(b)}."
+        )
+    if len(a) < 2:
+        raise ValueError("run_paired_ttest requires at least 2 score pairs.")
+
+    result = stats.ttest_rel(a, b, alternative=alternative)
+    stat    = float(result.statistic)
+    p_value = float(result.pvalue)
+    df      = len(a) - 1
+
+    diff    = a - b
+    mean_diff = float(diff.mean())
+    # 95% CI for mean difference using t distribution
+    se      = float(diff.std(ddof=1) / np.sqrt(len(diff)))
+    t_crit  = float(stats.t.ppf(0.975, df=df))
+    ci_low  = mean_diff - t_crit * se
+    ci_high = mean_diff + t_crit * se
+
+    alt_labels = {"two-sided": "A != B", "greater": "A > B", "less": "A < B"}
+    alt_str    = alt_labels.get(alternative, alternative)
+
+    if p_value < alpha:
+        direction = "A scores higher." if mean_diff > 0 else "B scores higher."
+        interp = (
+            f"Paired t-test (H1: {alt_str}): t={stat:.4f}, p={p_value:.4f}, df={df}. "
+            f"Significant difference at alpha={alpha}. {direction} "
+            f"mean diff={mean_diff:.4f}, 95% CI=[{ci_low:.4f}, {ci_high:.4f}]."
+        )
+    else:
+        interp = (
+            f"Paired t-test (H1: {alt_str}): t={stat:.4f}, p={p_value:.4f}, df={df}. "
+            f"No significant difference at alpha={alpha}. "
+            f"mean diff={mean_diff:.4f}, 95% CI=[{ci_low:.4f}, {ci_high:.4f}]."
+        )
+
+    return {
+        "statistic":      stat,
+        "p_value":        p_value,
+        "df":             df,
+        "mean_diff":      mean_diff,
+        "ci_low":         ci_low,
+        "ci_high":        ci_high,
+        "interpretation": interp,
+    }
+
+
+def run_corrected_kfold_ttest(
+    scores_a,
+    scores_b,
+    *,
+    k=10,
+    n_train=None,
+    n_test=None,
+    alpha=0.05,
+):
+    """
+    Nadeau-Bengio corrected repeated k-fold t-test.
+
+    Corrects the variance estimate for the positive correlation between
+    training folds sharing the same data (Nadeau & Bengio, 2003).
+
+    Parameters
+    ----------
+    scores_a : array-like, shape (k,)
+    scores_b : array-like, shape (k,)
+    k        : int   Number of folds.
+    n_train  : int or None   Training set size. When None, correction=1/k only.
+    n_test   : int or None   Test set size.
+    alpha    : float
+
+    Returns
+    -------
+    dict with keys: statistic, p_value, df, mean_diff, corrected_variance,
+                    interpretation
+    """
+    a = np.asarray(scores_a, dtype=float)
+    b = np.asarray(scores_b, dtype=float)
+    if a.shape != b.shape:
+        raise ValueError(
+            f"scores_a and scores_b must have the same length. "
+            f"Got {len(a)} and {len(b)}."
+        )
+    if len(a) < 2:
+        raise ValueError("run_corrected_kfold_ttest requires at least 2 score pairs.")
+
+    diff      = a - b
+    mean_diff = float(diff.mean())
+    n         = len(diff)
+
+    # Nadeau-Bengio correction factor
+    correction = 1.0 / k
+    if n_train is not None and n_test is not None and n_train > 0:
+        correction += n_test / n_train
+
+    sample_var  = float(diff.var(ddof=1))
+    corrected_var = correction * sample_var
+    se = float(np.sqrt(corrected_var / n))
+
+    if se == 0:
+        stat    = 0.0
+        p_value = 1.0
+    else:
+        stat    = float(mean_diff / se)
+        p_value = float(2 * stats.t.sf(abs(stat), df=n - 1))
+
+    df = n - 1
+
+    if p_value < alpha:
+        direction = "A scores higher." if mean_diff > 0 else "B scores higher."
+        interp = (
+            f"Corrected k-fold t-test (k={k}): t={stat:.4f}, p={p_value:.4f}, df={df}. "
+            f"Significant difference at alpha={alpha}. {direction} "
+            f"mean diff={mean_diff:.4f}, corrected variance={corrected_var:.6f}."
+        )
+    else:
+        interp = (
+            f"Corrected k-fold t-test (k={k}): t={stat:.4f}, p={p_value:.4f}, df={df}. "
+            f"No significant difference at alpha={alpha}. "
+            f"mean diff={mean_diff:.4f}, corrected variance={corrected_var:.6f}."
+        )
+
+    return {
+        "statistic":          stat,
+        "p_value":            p_value,
+        "df":                 df,
+        "mean_diff":          mean_diff,
+        "corrected_variance": corrected_var,
+        "interpretation":     interp,
+    }
+
+
+def compute_confidence_interval(scores, *, confidence=0.95, method="t"):
+    """
+    Compute a confidence interval for a 1-D array of scores.
+
+    Parameters
+    ----------
+    scores     : array-like, shape (n,)
+    confidence : float   Coverage level, e.g. 0.95. Default 0.95.
+    method     : "t" | "normal"
+        "t"      — uses t distribution (recommended for n < 30).
+        "normal" — uses standard normal (z-score).
+
+    Returns
+    -------
+    dict with keys: mean, std, n, lower, upper, margin
+    """
+    x = np.asarray(scores, dtype=float)
+    if len(x) < 2:
+        raise ValueError("compute_confidence_interval requires at least 2 values.")
+
+    n    = len(x)
+    mean = float(x.mean())
+    std  = float(x.std(ddof=1))
+    se   = std / np.sqrt(n)
+
+    alpha = 1 - confidence
+    if method == "t":
+        t_crit = float(stats.t.ppf(1 - alpha / 2, df=n - 1))
+        margin = t_crit * se
+    else:
+        z_crit = float(stats.norm.ppf(1 - alpha / 2))
+        margin = z_crit * se
+
+    return {
+        "mean":   mean,
+        "std":    std,
+        "n":      n,
+        "lower":  mean - margin,
+        "upper":  mean + margin,
+        "margin": margin,
+    }
+
+
+def compute_bootstrap_ci(values, *, confidence=0.95, n_bootstrap=1000,
+                         stat_fn=None, random_state=42):
+    """
+    Bootstrap confidence interval for a scalar statistic of *values*.
+
+    Parameters
+    ----------
+    values      : array-like, shape (n,)
+    confidence  : float   Coverage level. Default 0.95.
+    n_bootstrap : int     Number of bootstrap resamples. Default 1000.
+    stat_fn     : callable or None
+        Function applied to each resample to compute the statistic.
+        Default is np.mean.
+    random_state : int or None
+
+    Returns
+    -------
+    dict with keys: mean, std, lower, upper
+    """
+    x = np.asarray(values, dtype=float)
+    if stat_fn is None:
+        stat_fn = np.mean
+
+    rng       = np.random.default_rng(random_state)
+    boot_stats = np.array([
+        stat_fn(rng.choice(x, size=len(x), replace=True))
+        for _ in range(n_bootstrap)
+    ])
+
+    alpha = 1 - confidence
+    lower = float(np.percentile(boot_stats, 100 * alpha / 2))
+    upper = float(np.percentile(boot_stats, 100 * (1 - alpha / 2)))
+
+    return {
+        "mean":  float(boot_stats.mean()),
+        "std":   float(boot_stats.std()),
+        "lower": lower,
+        "upper": upper,
+    }
+
+
+def compute_average_ranks(scores):
+    """
+    Compute average classifier ranks from a scores matrix.
+
+    Parameters
+    ----------
+    scores : pd.DataFrame or 2-D array-like, shape (n_datasets, n_classifiers)
+        Each row is one dataset/fold; each column one classifier.
+        Higher scores are assumed better (rank 1 = best).
+
+    Returns
+    -------
+    pd.Series
+        Average rank per classifier, indexed by classifier name.
+        Sorted ascending (rank 1 = best classifier first).
+    """
+    if isinstance(scores, pd.DataFrame):
+        col_names = list(scores.columns)
+        data      = scores.to_numpy(dtype=float)
+    else:
+        data      = np.asarray(scores, dtype=float)
+        if data.ndim != 2:
+            raise ValueError(
+                f"scores must be 2-D (n_datasets × n_classifiers); got {data.shape}."
+            )
+        col_names = [f"Classifier_{i}" for i in range(data.shape[1])]
+
+    ranks = np.apply_along_axis(
+        lambda row: rankdata(-row, method="average"),
+        axis=1,
+        arr=data,
+    )
+    avg_ranks = pd.Series(ranks.mean(axis=0), index=col_names, name="avg_rank")
+    return avg_ranks.sort_values()
+
+
+def compute_metric_leaderboard(results_df, metric, *, higher_is_better=True):
+    """
+    Build a ranked leaderboard table for one metric from a results DataFrame.
+
+    Parameters
+    ----------
+    results_df       : pd.DataFrame   Must contain "Model" and *metric* columns.
+    metric           : str            Column name to rank.
+    higher_is_better : bool           Default True.
+
+    Returns
+    -------
+    pd.DataFrame with columns: Rank, Model, <metric>, Delta_from_best
+        Delta_from_best is always >= 0 (distance from the top-ranked model).
+    """
+    if "Model" not in results_df.columns:
+        raise ValueError("results_df must contain a 'Model' column.")
+    if metric not in results_df.columns:
+        raise ValueError(f"results_df does not contain column '{metric}'.")
+
+    df = results_df[["Model", metric]].copy().dropna(subset=[metric])
+    df = df.sort_values(metric, ascending=not higher_is_better).reset_index(drop=True)
+    df["Rank"] = df.index + 1
+
+    best_val       = float(df[metric].iloc[0])
+    df["Delta_from_best"] = (
+        (best_val - df[metric]).abs() if higher_is_better
+        else (df[metric] - best_val).abs()
+    )
+    df["Delta_from_best"] = df["Delta_from_best"].round(6)
+
+    return df[["Rank", "Model", metric, "Delta_from_best"]].reset_index(drop=True)
+
+
+def compute_pairwise_comparisons(scores_df, *, test="wilcoxon", alpha=0.05):
+    """
+    Compute all pairwise statistical comparisons between classifiers.
+
+    Parameters
+    ----------
+    scores_df : pd.DataFrame, shape (n_datasets, n_classifiers)
+        Each row is one dataset/fold; each column one classifier.
+        Higher values are assumed better.
+    test      : "wilcoxon" | "ttest"
+        Statistical test to use for each pair.
+    alpha     : float   Significance level.
+
+    Returns
+    -------
+    dict with keys:
+        "p_values"    : pd.DataFrame (n_cls × n_cls) — NaN on diagonal
+        "significant" : pd.DataFrame (n_cls × n_cls, bool)
+        "effect_sizes": pd.DataFrame (n_cls × n_cls) — NaN on diagonal
+    """
+    classifiers = list(scores_df.columns)
+    k = len(classifiers)
+
+    p_mat    = pd.DataFrame(np.full((k, k), np.nan), index=classifiers, columns=classifiers)
+    sig_mat  = pd.DataFrame(np.zeros((k, k), dtype=bool), index=classifiers, columns=classifiers)
+    eff_mat  = pd.DataFrame(np.full((k, k), np.nan), index=classifiers, columns=classifiers)
+
+    for i, ci in enumerate(classifiers):
+        for j, cj in enumerate(classifiers):
+            if i == j:
+                continue
+            a = scores_df[ci].to_numpy(dtype=float)
+            b = scores_df[cj].to_numpy(dtype=float)
+
+            try:
+                if test == "wilcoxon":
+                    res = run_wilcoxon_test(a, b, alpha=alpha)
+                    p   = res["p_value"]
+                    eff = res["effect_size_r"]
+                else:
+                    res = run_paired_ttest(a, b, alpha=alpha)
+                    p   = res["p_value"]
+                    eff = float(res["mean_diff"] / (np.std(a - b, ddof=1) + 1e-12))
+                p_mat.loc[ci, cj]   = p
+                sig_mat.loc[ci, cj] = p < alpha
+                eff_mat.loc[ci, cj] = eff
+            except Exception:
+                pass
+
+    return {
+        "p_values":    p_mat,
+        "significant": sig_mat,
+        "effect_sizes": eff_mat,
+    }
+
+
+def compute_significance_summary(pairwise_result):
+    """
+    Extract significant pairs from a compute_pairwise_comparisons() result.
+
+    Parameters
+    ----------
+    pairwise_result : dict   Output of compute_pairwise_comparisons().
+
+    Returns
+    -------
+    pd.DataFrame with columns: Classifier_A, Classifier_B, p_value, effect_size
+        Only pairs where A beats B significantly (p < alpha) are listed.
+        Each pair appears once (A < B lexicographically).
+    """
+    p_mat   = pairwise_result["p_values"]
+    sig_mat = pairwise_result["significant"]
+    eff_mat = pairwise_result["effect_sizes"]
+
+    classifiers = list(p_mat.index)
+    rows = []
+    for i, ci in enumerate(classifiers):
+        for j, cj in enumerate(classifiers):
+            if j <= i:
+                continue
+            if sig_mat.loc[ci, cj] or sig_mat.loc[cj, ci]:
+                rows.append({
+                    "Classifier_A":  ci,
+                    "Classifier_B":  cj,
+                    "p_value":       round(float(p_mat.loc[ci, cj]), 6),
+                    "effect_size":   round(float(eff_mat.loc[ci, cj]), 4),
+                })
+
+    if not rows:
+        return pd.DataFrame(columns=["Classifier_A", "Classifier_B", "p_value", "effect_size"])
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def compute_cd_nemenyi(n_classifiers, n_datasets, *, alpha=0.05):
+    """
+    Compute Nemenyi critical difference (CD) for post-hoc analysis after Friedman.
+
+    CD = q_alpha * sqrt(k*(k+1) / (6*N))
+
+    where q_alpha is from the Studentized range distribution divided by sqrt(2).
+
+    Parameters
+    ----------
+    n_classifiers : int   k — number of classifiers.
+    n_datasets    : int   N — number of datasets/folds.
+    alpha         : float   Significance level. Default 0.05.
+
+    Returns
+    -------
+    float   Critical difference value.
+    """
+    if n_classifiers < 2:
+        raise ValueError("n_classifiers must be >= 2.")
+    if n_datasets < 1:
+        raise ValueError("n_datasets must be >= 1.")
+
+    # q_alpha from Studentized range; divide by sqrt(2) for Nemenyi
+    q_alpha = float(
+        stats.studentized_range.ppf(1 - alpha, k=n_classifiers, df=np.inf) / np.sqrt(2)
+    )
+    cd = q_alpha * np.sqrt(n_classifiers * (n_classifiers + 1) / (6 * n_datasets))
+    return float(cd)
+
+
+def prepare_cd_diagram_data(scores_df, *, alpha=0.05):
+    """
+    Prepare data for a critical difference diagram (Demsar 2006).
+
+    Parameters
+    ----------
+    scores_df : pd.DataFrame, shape (n_datasets, n_classifiers)
+        Each row is one dataset/fold; each column one classifier.
+        Higher values are assumed better.
+    alpha     : float   Significance level. Default 0.05.
+
+    Returns
+    -------
+    dict with keys:
+        "avg_ranks"        : pd.Series   Average rank per classifier (ascending).
+        "cd"               : float       Nemenyi critical difference.
+        "significant_pairs": list[tuple] Pairs (A, B) where |rank_A - rank_B| > CD.
+        "n_classifiers"    : int
+        "n_datasets"       : int
+    """
+    n_datasets, n_classifiers = scores_df.shape
+
+    avg_ranks = compute_average_ranks(scores_df)
+    cd        = compute_cd_nemenyi(n_classifiers, n_datasets, alpha=alpha)
+
+    classifiers = list(avg_ranks.index)
+    sig_pairs   = []
+    for i, ci in enumerate(classifiers):
+        for j, cj in enumerate(classifiers):
+            if j <= i:
+                continue
+            if abs(float(avg_ranks[ci]) - float(avg_ranks[cj])) > cd:
+                sig_pairs.append((ci, cj))
+
+    return {
+        "avg_ranks":         avg_ranks,
+        "cd":                cd,
+        "significant_pairs": sig_pairs,
+        "n_classifiers":     n_classifiers,
+        "n_datasets":        n_datasets,
+    }
+
+
+# ================================================================
+# FUTURE: BAYESIAN TESTS  (not yet implemented)
 # ================================================================
 #
-# Nemenyi post-hoc test (follows a significant Friedman result):
-#   run_nemenyi_test(scores, *, alpha=0.05)
-#   scores : same (n_datasets × n_classifiers) input as run_friedman_test.
-#   Computes the critical difference (CD) at the given alpha level using
-#   the Studentized range distribution. Two classifiers differ significantly
-#   when |avg_rank_i − avg_rank_j| > CD.
-#   Returns: pairwise p-value matrix (DataFrame), CD value, and a
-#   significance mask DataFrame (bool) for easy heatmap plotting.
-#   Requires: pip install scikit-posthocs  OR  manual implementation
-#             via scipy.stats.studentized_range.
-#
-# Diebold-Mariano test (pairwise forecast accuracy for time series):
-#   run_diebold_mariano_test(errors_a, errors_b, *, h=1,
-#                            power=2, alternative="two-sided", alpha=0.05)
-#   errors_a, errors_b : 1-D arrays of forecast errors (one per time step).
-#   h : forecast horizon (accounts for serial correlation in multi-step forecasts).
-#   power : loss differential power (1 = absolute error, 2 = squared error).
-#   Returns: DM statistic, p-value, interpretation.
-#   Requires: no additional dependencies (scipy.stats.t for the p-value).
-#
-# Bayesian comparison tests:
 #   run_bayesian_signed_rank_test(scores_a, scores_b, *,
 #                                 rope=0.01, prior_strength=0.75)
 #   Bayesian counterpart to the Wilcoxon signed-rank (Benavoli et al. 2017).
 #   Returns posterior probabilities: P(A > B), P(A ≈ B), P(B > A).
-#   rope : Region Of Practical Equivalence half-width; differences smaller
-#          than rope are considered practically equivalent.
 #   Requires: pip install baycomp
 #
 #   run_bayesian_correlated_t_test(scores_a, scores_b, *,

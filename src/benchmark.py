@@ -546,6 +546,8 @@ def run_benchmark(
     ts_horizon=None,
     # ── Optional: experiment tracking ─────────────────────────────
     experiment_name=None,
+    # ── Optional: statistical comparison ──────────────────────────
+    compute_stats=False,
 ):
     """
     Full benchmark pipeline: load → preprocess → (imbalance) → (optimize) →
@@ -624,6 +626,11 @@ def run_benchmark(
         and four artifact files are written: config.json, metrics.csv,
         environment.txt, experiment_summary.json.
         When None (default), no tracking is performed.
+
+    compute_stats : bool
+        When True, computes bootstrap confidence intervals per model and (for
+        classification) pairwise McNemar tests between all model pairs.
+        Results stored under preprocessor["stats_summary"]. Default False.
 
     Returns
     -------
@@ -837,7 +844,8 @@ def run_benchmark(
     pca_paths      = {}  # {name: Path}  PCA variance         (unsupervised)
 
     # ── Per-model loop ─────────────────────────────────────────────────────
-    results = []
+    results  = []
+    y_preds  = {}   # {name: ndarray} — populated for compute_stats
 
     _log(f"[models]  Running {len(models_dict)} model(s) ...")
     for name, model in models_dict.items():
@@ -849,14 +857,17 @@ def run_benchmark(
             metrics, y_pred = _run_regression(
                 name, model, X_train, X_test, y_train, y_test
             )
+            y_preds[name] = y_pred
         elif is_binary:
             metrics, y_pred = _run_binary_classification(
                 name, model, X_train, X_test, y_train, y_test, ax_roc, ax_pr
             )
+            y_preds[name] = y_pred
         else:
             metrics, y_pred = _run_multiclass_classification(
                 name, model, X_train, X_test, y_train, y_test
             )
+            y_preds[name] = y_pred
 
         results.append({"Model": name, **metrics})
 
@@ -918,11 +929,56 @@ def run_benchmark(
     if verbose:
         print(results_df.to_string(index=False))
 
+    # ── Optional: statistical comparison ──────────────────────────────────
+    stats_summary = {}
+    if compute_stats and not task_is_unsup and y_preds:
+        from src.stats import compute_bootstrap_ci, run_mcnemar_test
+        _log("\n[stats]   Computing bootstrap CIs and pairwise tests ...")
+
+        ci_results = {}
+        for m_name, yp in y_preds.items():
+            yp = np.asarray(yp)
+            if task_is_reg:
+                vals = np.abs(yp - np.asarray(y_test))
+                ci  = compute_bootstrap_ci(vals, stat_fn=np.mean)
+                ci_results[m_name] = {"metric": "MAE", **ci}
+            else:
+                vals = (yp == np.asarray(y_test)).astype(float)
+                ci  = compute_bootstrap_ci(vals, stat_fn=np.mean)
+                ci_results[m_name] = {"metric": "Accuracy", **ci}
+
+        stats_summary["bootstrap_ci"] = ci_results
+
+        # Pairwise McNemar for classification only
+        if task == "classification" and len(y_preds) >= 2:
+            model_names = list(y_preds.keys())
+            pairs = {}
+            for i in range(len(model_names)):
+                for j in range(i + 1, len(model_names)):
+                    na, nb = model_names[i], model_names[j]
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            res = run_mcnemar_test(y_test, y_preds[na], y_preds[nb])
+                        pairs[f"{na} vs {nb}"] = {
+                            "statistic":    res["statistic"],
+                            "p_value":      res["p_value"],
+                            "n_discordant": res["n_discordant"],
+                        }
+                    except Exception:
+                        pass
+            stats_summary["mcnemar_pairs"] = pairs
+
+        preprocessor["stats_summary"] = stats_summary
+        _log(f"[stats]   Bootstrap CIs computed for {len(ci_results)} model(s).")
+
     # ── Optional: experiment tracking ─────────────────────────────────────
     if tracker is not None:
         tracker.log_metrics(results_df)
         if opt_results:
             tracker.log_optimization(opt_results)
+        if stats_summary:
+            tracker.log_stats(stats_summary)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,
@@ -972,6 +1028,7 @@ def run_benchmark(
         cluster_paths=cluster_paths    if task_is_unsup else None,
         pca_paths=pca_paths            if task_is_unsup else None,
         optimization_results=opt_results if opt_results else None,
+        stats_summary=stats_summary if stats_summary else None,
     )
 
     return results_df, preprocessor

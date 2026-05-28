@@ -865,6 +865,285 @@ def prepare_cd_diagram_data(scores_df, *, alpha=0.05):
 
 
 # ================================================================
+# FORECASTING STATISTICAL COMPARISON
+# Reference: Diebold & Mariano (1995). Comparing predictive accuracy.
+#            Journal of Business and Economic Statistics, 13(3), 253–263.
+#   HLN correction: Harvey, Leybourne & Newbold (1997). Testing the equality
+#            of prediction mean squared errors. International Journal of
+#            Forecasting, 13(2), 281–291.
+# ================================================================
+
+_VALID_LOSSES = {"mae", "mse", "rmse"}
+
+
+def _apply_loss(errors, loss):
+    """Return per-step loss values from raw signed forecast errors."""
+    e = np.asarray(errors, dtype=float)
+    if loss == "mae":
+        return np.abs(e)
+    elif loss in ("mse", "rmse"):
+        # RMSE loss per step == MSE loss per step (sqrt is monotone, does not
+        # change pairwise comparisons; RMSE applies at aggregate level only)
+        return e ** 2
+    else:
+        raise ValueError(
+            f"Unknown loss '{loss}'. Valid choices: {sorted(_VALID_LOSSES)}."
+        )
+
+
+def compute_forecast_error_series(y_true, y_pred, *, loss="mae"):
+    """
+    Compute per-step forecast losses for one model.
+
+    Parameters
+    ----------
+    y_true : array-like, shape (T,)   Observed values.
+    y_pred : array-like, shape (T,)   Predicted values.
+    loss   : {"mae", "mse", "rmse"}
+        Loss function applied element-wise. "rmse" is treated as "mse"
+        at the per-step level (sqrt applies only at aggregate level).
+
+    Returns
+    -------
+    np.ndarray, shape (T,)   Per-step loss values.
+    """
+    if loss not in _VALID_LOSSES:
+        raise ValueError(
+            f"Unknown loss '{loss}'. Valid choices: {sorted(_VALID_LOSSES)}."
+        )
+    yt = np.asarray(y_true, dtype=float)
+    yp = np.asarray(y_pred, dtype=float)
+    if yt.shape != yp.shape:
+        raise ValueError(
+            f"y_true and y_pred must have the same shape. "
+            f"Got {yt.shape} and {yp.shape}."
+        )
+    return _apply_loss(yt - yp, loss)
+
+
+def run_diebold_mariano_test(
+    errors_a,
+    errors_b,
+    *,
+    h=1,
+    loss="mae",
+    alpha=0.05,
+):
+    """
+    Diebold-Mariano (1995) test for equal predictive accuracy of two forecasters.
+
+    Tests H0: E[L(e_A)] == E[L(e_B)] — the two methods have equal expected loss.
+    Applies the Harvey-Leybourne-Newbold (1997) small-sample correction: the
+    adjusted statistic follows a t(T-1) distribution rather than N(0,1).
+
+    For multi-step forecasts (h > 1) the long-run variance is estimated with a
+    truncated HAC estimator that sums h-1 autocovariances of the loss differential.
+
+    Parameters
+    ----------
+    errors_a : array-like, shape (T,)
+        Signed forecast errors for model A: y_true − y_pred_A.
+    errors_b : array-like, shape (T,)
+        Signed forecast errors for model B: y_true − y_pred_B.
+    h : int
+        Forecast horizon in time steps. h=1 for one-step-ahead. Default 1.
+    loss : {"mae", "mse", "rmse"}
+        Per-step loss function. "rmse" treated as "mse" at per-step level.
+    alpha : float
+        Significance level for interpretation. Default 0.05.
+
+    Returns
+    -------
+    dict with keys:
+        statistic      : float   HLN-corrected DM statistic.
+        p_value        : float   Two-sided p-value (t distribution, df=T-1).
+        h              : int     Forecast horizon used.
+        loss           : str     Loss function used.
+        mean_diff      : float   Mean loss differential L(A) − L(B). Positive → A worse.
+        n_obs          : int     Number of observations T.
+        interpretation : str
+    """
+    ea = np.asarray(errors_a, dtype=float)
+    eb = np.asarray(errors_b, dtype=float)
+
+    if ea.shape != eb.shape:
+        raise ValueError(
+            f"errors_a and errors_b must have the same length. "
+            f"Got {len(ea)} and {len(eb)}."
+        )
+    if len(ea) < 2:
+        raise ValueError("run_diebold_mariano_test requires at least 2 observations.")
+    if not isinstance(h, int) or h < 1:
+        raise ValueError(f"h must be a positive integer. Got h={h!r}.")
+    if loss not in _VALID_LOSSES:
+        raise ValueError(
+            f"Unknown loss '{loss}'. Valid choices: {sorted(_VALID_LOSSES)}."
+        )
+
+    T = len(ea)
+    la = _apply_loss(ea, loss)
+    lb = _apply_loss(eb, loss)
+    d  = la - lb           # loss differential: positive → A is worse
+    d_bar = d.mean()
+
+    # ── Long-run variance estimate ────────────────────────────────────────────
+    # gamma_k = biased autocovariance at lag k
+    def _autocovariance(x, k):
+        T_ = len(x)
+        xc = x - x.mean()
+        if k >= T_:
+            return 0.0
+        return float(np.dot(xc[:T_ - k], xc[k:])) / T_
+
+    gamma_0 = _autocovariance(d, 0)
+    lrv = gamma_0
+    for k in range(1, h):
+        lrv += 2.0 * _autocovariance(d, k)
+
+    if lrv <= 0:
+        # Variance is zero or negative (e.g. identical forecasts) → no difference
+        return {
+            "statistic":      0.0,
+            "p_value":        1.0,
+            "h":              h,
+            "loss":           loss,
+            "mean_diff":      float(d_bar),
+            "n_obs":          T,
+            "interpretation": (
+                "Diebold-Mariano test: zero loss differential variance. "
+                "Both models produce identical losses."
+            ),
+        }
+
+    # Raw DM statistic
+    dm_raw = d_bar / np.sqrt(lrv / T)
+
+    # ── Harvey-Leybourne-Newbold (1997) small-sample correction ──────────────
+    # Correction factor: sqrt((T + 1 - 2h + h*(h-1)/T) / T)
+    numerator = T + 1 - 2 * h + h * (h - 1) / T
+    if numerator <= 0:
+        # Edge case: very long horizon relative to sample size
+        hln_factor = 1.0
+    else:
+        hln_factor = np.sqrt(numerator / T)
+
+    dm_stat  = float(dm_raw * hln_factor)
+    p_value  = float(2 * stats.t.sf(abs(dm_stat), df=T - 1))
+
+    # ── Interpretation ────────────────────────────────────────────────────────
+    loss_str = loss.upper() if loss != "rmse" else "MSE (RMSE proxy)"
+    if p_value < alpha:
+        favored = "B" if d_bar > 0 else "A"
+        interp = (
+            f"DM test (h={h}, loss={loss_str}): t={dm_stat:.4f}, p={p_value:.4f}. "
+            f"Significant difference at alpha={alpha}. "
+            f"Model {favored} forecasts more accurately "
+            f"(mean loss diff={d_bar:.4f}, A-B)."
+        )
+    else:
+        interp = (
+            f"DM test (h={h}, loss={loss_str}): t={dm_stat:.4f}, p={p_value:.4f}. "
+            f"No significant difference at alpha={alpha} "
+            f"(mean loss diff={d_bar:.4f}, A-B)."
+        )
+
+    return {
+        "statistic":      dm_stat,
+        "p_value":        p_value,
+        "h":              h,
+        "loss":           loss,
+        "mean_diff":      float(d_bar),
+        "n_obs":          T,
+        "interpretation": interp,
+    }
+
+
+def compare_forecast_models(
+    error_dict,
+    *,
+    baseline=None,
+    h=1,
+    loss="mae",
+    alpha=0.05,
+):
+    """
+    Pairwise Diebold-Mariano comparison of multiple forecasting models.
+
+    Parameters
+    ----------
+    error_dict : dict {model_name: array-like}
+        Signed forecast errors (y_true − y_pred) per model. All arrays must
+        have the same length.
+    baseline   : str or None
+        When provided, only compare every other model against this one.
+        When None, all pairwise (upper-triangle) comparisons are run.
+    h          : int     Forecast horizon. Default 1.
+    loss       : {"mae", "mse", "rmse"}   Loss function. Default "mae".
+    alpha      : float   Significance level. Default 0.05.
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        Model_A, Model_B, DM_Statistic, p_value,
+        Mean_Loss_Diff, Significant, Favored
+        Positive Mean_Loss_Diff → A has higher (worse) loss than B.
+    """
+    names = list(error_dict.keys())
+    if len(names) < 2:
+        raise ValueError("compare_forecast_models requires at least 2 models.")
+
+    if baseline is not None and baseline not in names:
+        raise ValueError(
+            f"baseline='{baseline}' not found in error_dict. "
+            f"Available models: {names}."
+        )
+
+    # Build pairs to compare
+    if baseline is not None:
+        pairs = [(baseline, n) for n in names if n != baseline]
+    else:
+        pairs = [
+            (names[i], names[j])
+            for i in range(len(names))
+            for j in range(i + 1, len(names))
+        ]
+
+    rows = []
+    for na, nb in pairs:
+        try:
+            res = run_diebold_mariano_test(
+                error_dict[na], error_dict[nb],
+                h=h, loss=loss, alpha=alpha,
+            )
+            favored = (
+                "B" if res["mean_diff"] > 0 and res["p_value"] < alpha
+                else "A" if res["mean_diff"] < 0 and res["p_value"] < alpha
+                else "Neither"
+            )
+            rows.append({
+                "Model_A":        na,
+                "Model_B":        nb,
+                "DM_Statistic":   round(res["statistic"], 4),
+                "p_value":        round(res["p_value"], 4),
+                "Mean_Loss_Diff": round(res["mean_diff"], 6),
+                "Significant":    res["p_value"] < alpha,
+                "Favored":        favored,
+            })
+        except Exception as exc:
+            rows.append({
+                "Model_A":        na,
+                "Model_B":        nb,
+                "DM_Statistic":   float("nan"),
+                "p_value":        float("nan"),
+                "Mean_Loss_Diff": float("nan"),
+                "Significant":    False,
+                "Favored":        f"Error: {exc}",
+            })
+
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+# ================================================================
 # FUTURE: BAYESIAN TESTS  (not yet implemented)
 # ================================================================
 #

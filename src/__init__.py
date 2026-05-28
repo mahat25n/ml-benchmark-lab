@@ -108,6 +108,9 @@ from src.stats import (
     compute_significance_summary,
     compute_cd_nemenyi,
     prepare_cd_diagram_data,
+    compute_forecast_error_series,
+    run_diebold_mariano_test,
+    compare_forecast_models,
 )
 
 # ── Plots ─────────────────────────────────────────────────────────
@@ -192,6 +195,9 @@ __all__ = [
     "compute_average_ranks", "compute_metric_leaderboard",
     "compute_pairwise_comparisons", "compute_significance_summary",
     "compute_cd_nemenyi", "prepare_cd_diagram_data",
+    # Statistics — forecasting
+    "compute_forecast_error_series", "run_diebold_mariano_test",
+    "compare_forecast_models",
     # Plots — classification
     "plot_confusion_matrix",
     "init_roc_figure", "add_roc_curve", "finalize_roc_plot",

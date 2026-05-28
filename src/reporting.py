@@ -346,6 +346,53 @@ def export_results_word(
         opt_df = pd.DataFrame(rows)
         _add_word_table(doc, opt_df)
 
+    # ── Diebold-Mariano Forecast Comparison ──────────────────────────────────
+    if stats_summary:
+        for loss_key in ("dm_mae", "dm_mse"):
+            records = stats_summary.get(loss_key)
+            if not records:
+                continue
+            loss_label = loss_key.replace("dm_", "").upper()
+            doc.add_page_break()
+            doc.add_heading("Diebold-Mariano Forecast Comparison", level=2)
+            doc.add_heading(f"Loss function: {loss_label}", level=3)
+            rows = []
+            for rec in records:
+                rows.append({
+                    "Model A":    rec.get("Model_A", ""),
+                    "Model B":    rec.get("Model_B", ""),
+                    "DM Stat":    round(float(rec.get("DM_Statistic", float("nan"))), 4),
+                    "p-value":    round(float(rec.get("p_value", float("nan"))), 4),
+                    "Loss Diff":  round(float(rec.get("Mean_Loss_Diff", float("nan"))), 6),
+                    "Sig.":       "Yes" if rec.get("Significant") else "No",
+                    "Favored":    rec.get("Favored", ""),
+                })
+            if rows:
+                _add_word_table(doc, pd.DataFrame(rows))
+            break  # Only add one section header; both loss tables follow together
+
+        # Add second loss table without a new page break if first was added
+        added_first = any(stats_summary.get(k) for k in ("dm_mae", "dm_mse"))
+        loss_keys_remaining = [k for k in ("dm_mae", "dm_mse")
+                               if stats_summary.get(k)]
+        if len(loss_keys_remaining) > 1:
+            second_key = loss_keys_remaining[1]
+            loss_label2 = second_key.replace("dm_", "").upper()
+            doc.add_heading(f"Loss function: {loss_label2}", level=3)
+            rows2 = []
+            for rec in stats_summary[second_key]:
+                rows2.append({
+                    "Model A":    rec.get("Model_A", ""),
+                    "Model B":    rec.get("Model_B", ""),
+                    "DM Stat":    round(float(rec.get("DM_Statistic", float("nan"))), 4),
+                    "p-value":    round(float(rec.get("p_value", float("nan"))), 4),
+                    "Loss Diff":  round(float(rec.get("Mean_Loss_Diff", float("nan"))), 6),
+                    "Sig.":       "Yes" if rec.get("Significant") else "No",
+                    "Favored":    rec.get("Favored", ""),
+                })
+            if rows2:
+                _add_word_table(doc, pd.DataFrame(rows2))
+
     # ── Statistical Analysis ──────────────────────────────────────────────
     if stats_summary and "bootstrap_ci" in stats_summary:
         doc.add_page_break()

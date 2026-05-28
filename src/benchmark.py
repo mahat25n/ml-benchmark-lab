@@ -314,6 +314,7 @@ def _run_time_series_pipeline(
     optimization_method="random",
     search_space=None,
     n_iter=20,
+    compute_stats=False,
 ):
     """
     Full time-series benchmark: load -> feature engineering ->
@@ -419,6 +420,7 @@ def _run_time_series_pipeline(
     # Per-model loop
     results        = []
     forecast_paths = {}
+    ts_y_preds     = {}   # {name: (y_true_all, y_pred_all)} for compute_stats
 
     if tracker is not None:
         tracker.log_models(list(models_dict.keys()))
@@ -432,6 +434,7 @@ def _run_time_series_pipeline(
         if fold_results:
             y_true_all = np.concatenate([r[0] for r in fold_results])
             y_pred_all = np.concatenate([r[1] for r in fold_results])
+            ts_y_preds[name] = (y_true_all, y_pred_all)
             safe = name.replace(" ", "_")
 
             fc_path = out / f"forecast_{safe}.png"
@@ -455,16 +458,42 @@ def _run_time_series_pipeline(
     if verbose:
         print(results_df.to_string(index=False))
 
+    # ── Optional: forecasting statistical comparison ───────────────────────
+    ts_stats_summary = {}
+    if compute_stats and len(ts_y_preds) >= 2:
+        from src.stats import compare_forecast_models
+        log("\n[stats]   Computing Diebold-Mariano pairwise tests ...")
+        error_dict = {
+            m: yt - yp for m, (yt, yp) in ts_y_preds.items()
+        }
+        for loss in ("mae", "mse"):
+            try:
+                dm_df = compare_forecast_models(
+                    error_dict, h=horizon, loss=loss, alpha=0.05
+                )
+                ts_stats_summary[f"dm_{loss}"] = dm_df.to_dict(orient="records")
+            except Exception as exc:
+                warnings.warn(
+                    f"run_benchmark: DM test ({loss}) failed: {exc}",
+                    stacklevel=2,
+                )
+        if ts_stats_summary:
+            preprocessor["stats_summary"] = ts_stats_summary
+            log(f"[stats]   DM tests computed for {len(error_dict)} model(s).")
+
     _export_results(
         results_df, out, export_formats, report_title, log,
         forecast_paths=forecast_paths or None,
         optimization_results=ts_opt_results if ts_opt_results else None,
+        stats_summary=ts_stats_summary if ts_stats_summary else None,
     )
 
     if tracker is not None:
         tracker.log_metrics(results_df)
         if ts_opt_results:
             tracker.log_optimization(ts_opt_results)
+        if ts_stats_summary:
+            tracker.log_stats(ts_stats_summary)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,
@@ -702,6 +731,7 @@ def run_benchmark(
             optimization_method=optimization_method,
             search_space=search_space,
             n_iter=n_iter,
+            compute_stats=compute_stats,
         )
 
     # ── Data ───────────────────────────────────────────────────────────────

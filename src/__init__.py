@@ -189,6 +189,17 @@ from src.plots import (
     plot_numeric_distributions,
 )
 
+# ── Model persistence ──────────────────────────────────────────────
+from src.model_io import (
+    save_model,
+    load_model,
+    save_pipeline,
+    load_pipeline,
+    predict_from_csv,
+    batch_predict,
+    save_model_for_run,
+)
+
 
 __all__ = [
     # Version
@@ -269,4 +280,9 @@ __all__ = [
     "profile_dataset", "summarize_columns", "summarize_target", "summarize_missingness",
     # Profile plots
     "plot_missing_heatmap", "plot_class_distribution", "plot_numeric_distributions",
+    # Model persistence
+    "save_model", "load_model",
+    "save_pipeline", "load_pipeline",
+    "predict_from_csv", "batch_predict",
+    "save_model_for_run",
 ]

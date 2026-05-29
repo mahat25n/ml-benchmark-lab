@@ -147,6 +147,8 @@ def _cmd_examples(_args):
          "Experiment aggregation and benchmark analytics"),
         ("data_profile_example.py",
          "Dataset profiling and automated data reports"),
+        ("model_persistence_example.py",
+         "Model persistence, pipeline save/load, and batch inference"),
     ]
 
     print("Available examples  (run with: python examples/<name>)\n")
@@ -283,6 +285,91 @@ def _cmd_analyze(args):
             print(f"warning: Word export failed — {exc}", file=sys.stderr)
 
 
+def _cmd_save_model(args):
+    """Save a trained model from a benchmark run to a dedicated directory."""
+    from pathlib import Path
+    from src.model_io import load_model, save_model, save_pipeline
+
+    try:
+        import joblib
+    except ImportError:
+        print("error: joblib is required — pip install joblib", file=sys.stderr)
+        sys.exit(1)
+
+    model_file = Path(args.model_path)
+    if not model_file.exists():
+        print(f"error: model file not found — {model_file}", file=sys.stderr)
+        sys.exit(1)
+
+    feature_names = (
+        [f.strip() for f in args.feature_names.split(",")]
+        if args.feature_names
+        else None
+    )
+
+    try:
+        model = load_model(model_file)
+
+        if args.pipeline_path:
+            from src.model_io import load_pipeline
+            _, preprocessor = load_pipeline(args.pipeline_path)
+            result = save_pipeline(
+                model, preprocessor, args.output_dir,
+                extra_metadata={"saved_from_cli": True},
+            )
+            print(f"Pipeline saved  : {result['pipeline_path']}")
+            print(f"Model saved     : {result['model_path']}")
+        else:
+            result = save_model(
+                model, args.output_dir,
+                feature_names=feature_names,
+                extra_metadata={"saved_from_cli": True},
+            )
+            print(f"Model saved     : {result['model_path']}")
+
+        print(f"Metadata saved  : {result['metadata_path']}")
+
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_predict(args):
+    """Run batch inference on a CSV using a saved model or pipeline."""
+    from pathlib import Path
+    from src.model_io import predict_from_csv
+
+    na_values = (
+        [v.strip() for v in args.na_values.split(",")]
+        if getattr(args, "na_values", None)
+        else None
+    )
+
+    try:
+        preds = predict_from_csv(
+            args.csv_path,
+            args.model_path,
+            preprocessor_path=getattr(args, "pipeline_path", None) or None,
+            target_col=getattr(args, "target", None) or None,
+            na_values=na_values,
+            output_path=args.output_path or None,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Predictions: {len(preds)} rows")
+    unique, counts = __import__("numpy").unique(preds, return_counts=True)
+    for val, cnt in zip(unique, counts):
+        print(f"  {val!s:<20} {cnt:>6}  ({100 * cnt / len(preds):.1f}%)")
+
+    if args.output_path:
+        print(f"\nOutput written to: {args.output_path}")
+
+
 def _cmd_version(_args):
     """Print the package version string."""
     from src import __version__
@@ -312,6 +399,8 @@ def _build_parser():
             "  ml-benchmark run churn.csv Churn --compute-stats --export word\n"
             "  ml-benchmark profile data.csv --target label --plots\n"
             "  ml-benchmark analyze --base-dir outputs --experiment-name exp01\n"
+            "  ml-benchmark save-model outputs/model.pkl --output-dir saved/\n"
+            "  ml-benchmark predict new_data.csv saved/ --output-path preds.csv\n"
             "  ml-benchmark info\n"
             "  ml-benchmark examples\n"
             "  ml-benchmark version\n"
@@ -526,6 +615,71 @@ def _build_parser():
         help="Save analysis plots (win frequency, avg rank, distribution, timeline).",
     )
     analyze_p.set_defaults(func=_cmd_analyze)
+
+    # ── save-model ───────────────────────────────────────────────────────────
+    save_model_p = sub.add_parser(
+        "save-model",
+        help="Save a trained model (and optional pipeline) to a directory.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Load a joblib-serialised model, write model.pkl, model_metadata.json\n"
+            "and optionally pipeline.pkl into the output directory."
+        ),
+    )
+    save_model_p.add_argument(
+        "model_path",
+        help="Path to the existing model.pkl file.",
+    )
+    save_model_p.add_argument(
+        "--output-dir", default="outputs/saved_model", dest="output_dir", metavar="DIR",
+        help="Directory to write the saved artifacts (default: outputs/saved_model).",
+    )
+    save_model_p.add_argument(
+        "--pipeline-path", default=None, dest="pipeline_path", metavar="PKL",
+        help="Path to pipeline.pkl to bundle the preprocessor alongside the model.",
+    )
+    save_model_p.add_argument(
+        "--feature-names", default=None, dest="feature_names", metavar="C1,C2",
+        help="Comma-separated feature names to store in metadata.",
+    )
+    save_model_p.set_defaults(func=_cmd_save_model)
+
+    # ── predict ──────────────────────────────────────────────────────────────
+    predict_p = sub.add_parser(
+        "predict",
+        help="Run batch inference on a CSV using a saved model or pipeline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Load a CSV, apply saved preprocessing, and produce predictions.\n"
+            "Supply a directory containing pipeline.pkl for end-to-end transforms,\n"
+            "or a bare model.pkl for raw-feature inference."
+        ),
+    )
+    predict_p.add_argument(
+        "csv_path",
+        help="Path to the input CSV file.",
+    )
+    predict_p.add_argument(
+        "model_path",
+        help="Path to model.pkl or a directory that contains pipeline.pkl.",
+    )
+    predict_p.add_argument(
+        "--target", default=None, metavar="COL",
+        help="Target column to drop before inference (if present in the CSV).",
+    )
+    predict_p.add_argument(
+        "--pipeline-path", default=None, dest="pipeline_path", metavar="PKL",
+        help="Separate pipeline.pkl to use for preprocessing (overrides model_path dir).",
+    )
+    predict_p.add_argument(
+        "--output-path", default=None, dest="output_path", metavar="CSV",
+        help="Write predictions to this CSV file.",
+    )
+    predict_p.add_argument(
+        "--na-values", default=None, dest="na_values", metavar="V,V",
+        help="Extra NA markers passed to the CSV reader (e.g. '?,N/A').",
+    )
+    predict_p.set_defaults(func=_cmd_predict)
 
     # ── version ──────────────────────────────────────────────────────────────
     version_p = sub.add_parser(

@@ -60,6 +60,7 @@ def _cmd_run(args):
         optimization_method=args.optimization_method,
         n_iter=args.n_iter,
         compute_stats=args.compute_stats,
+        log_level=args.log_level,
         verbose=not args.quiet,
     )
 
@@ -140,6 +141,8 @@ def _cmd_examples(_args):
          "Advanced statistical comparison and ranking"),
         ("diebold_mariano_example.py",
          "Diebold-Mariano forecasting comparison"),
+        ("logging_diagnostics_example.py",
+         "Logging, timing, and data-quality diagnostics"),
     ]
 
     print("Available examples  (run with: python examples/<name>)\n")
@@ -293,6 +296,13 @@ def _build_parser():
     run_p.add_argument(
         "--ts-horizon", default=None, type=int, dest="ts_horizon", metavar="INT",
         help="Test-window size per fold for time_series task (default: auto).",
+    )
+
+    # Logging
+    run_p.add_argument(
+        "--log-level", default="info", dest="log_level",
+        choices=["debug", "info", "warning", "error"],
+        help="Logging verbosity for benchmark.log and console (default: info).",
     )
 
     # Output control

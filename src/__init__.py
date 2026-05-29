@@ -150,6 +150,9 @@ from src.experiment import (
     set_global_seed,
 )
 
+# ── Logging and diagnostics ─────────────────────────────────────────
+from src.logging_utils import Timer, capture_warnings, get_logger, run_diagnostics
+
 
 __all__ = [
     # Version
@@ -216,4 +219,6 @@ __all__ = [
     "export_results_csv", "export_results_excel", "export_results_word",
     # Experiment tracking
     "ExperimentTracker", "generate_run_id", "set_global_seed", "capture_environment",
+    # Logging and diagnostics
+    "get_logger", "Timer", "capture_warnings", "run_diagnostics",
 ]

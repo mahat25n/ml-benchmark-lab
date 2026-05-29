@@ -1,4 +1,5 @@
 import copy
+import json
 import warnings
 from pathlib import Path
 
@@ -324,9 +325,17 @@ def _run_time_series_pipeline(
     (results_df, preprocessor) tuple as the other task runners.
     """
     from src.data import load_data, preprocess_data
+    from src.logging_utils import Timer as _Timer, run_diagnostics as _run_diagnostics
     from src.plots import plot_forecast, plot_rolling_forecast, plot_residuals_over_time
 
+    _ts_total = _Timer()
+    _ts_total.start()
+    _ts_opt_elapsed = 0.0
+    _ts_model_timings = {}
+
     log(f"[data]    Loading: {csv_path}")
+    _ts_data = _Timer()
+    _ts_data.start()
     df = load_data(csv_path, na_values=na_values)
 
     # Feature engineering — purely temporal, no future leakage
@@ -338,6 +347,7 @@ def _run_time_series_pipeline(
     # Encode categoricals; skip scaling so each fold can scale independently
     X, y, preprocessor = preprocess_data(df, target_col, scaler=False)
     n = len(X)
+    _ts_data.stop()
     log(f"[data]    n_samples={n}  features={X.shape[1]}")
 
     if tracker is not None:
@@ -372,6 +382,27 @@ def _run_time_series_pipeline(
     if tracker is not None:
         tracker.log_config(ts_n_splits=len(splits), ts_horizon=horizon)
 
+    # ── Diagnostics on first walk-forward split ────────────────────────────
+    _ts_diag = {}
+    try:
+        _tr_idx, _te_idx = splits[0]
+        _feat_names = list(preprocessor.get("feature_names") or []) or None
+        _ts_diag = _run_diagnostics(
+            X[_tr_idx], X[_te_idx], y[_tr_idx], y[_te_idx],
+            feature_names=_feat_names,
+            task="regression",
+        )
+        preprocessor["diagnostics"] = _ts_diag
+        (out / "diagnostics_summary.json").write_text(
+            json.dumps(_ts_diag, indent=2, default=str), encoding="utf-8"
+        )
+        if _ts_diag.get("has_issues"):
+            log(f"[diag]    {len(_ts_diag['issue_summary'])} issue(s) detected:")
+            for _issue in _ts_diag["issue_summary"]:
+                log(f"[diag]      {_issue}")
+    except Exception:
+        pass
+
     # ── Optional: hyperparameter optimization (time series) ───────────────
     # Inner CV uses TimeSeriesSplit to respect temporal order.
     _do_optimize_ts = bool(optimize)
@@ -387,6 +418,8 @@ def _run_time_series_pipeline(
     if _do_optimize_ts:
         from sklearn.model_selection import TimeSeriesSplit
         from src.optimization import build_search_space, optimize_model
+        _ts_opt_timer = _Timer()
+        _ts_opt_timer.start()
         ts_inner_cv = TimeSeriesSplit(n_splits=min(3, max(2, ts_n_splits - 1)))
         log(f"[optim]   {optimization_method} search (TimeSeriesSplit inner CV) ...")
         for m_name, model in list(models_dict.items()):
@@ -416,6 +449,8 @@ def _run_time_series_pipeline(
                 f"duration={opt_result['search_duration']:.1f}s  "
                 f"params={opt_result['best_params']}"
             )
+        _ts_opt_timer.stop()
+        _ts_opt_elapsed = _ts_opt_timer.elapsed
 
     # Per-model loop
     results        = []
@@ -428,7 +463,11 @@ def _run_time_series_pipeline(
     log(f"[models]  Running {len(models_dict)} model(s) ...")
     for name, model in models_dict.items():
         log(f"  {name:<30}")
+        _ts_m_timer = _Timer()
+        _ts_m_timer.start()
         metrics, fold_results = _run_time_series_walk_forward(name, model, X, y, splits)
+        _ts_m_timer.stop()
+        _ts_model_timings[name] = round(_ts_m_timer.elapsed, 3)
         results.append({"Model": name, **metrics})
 
         if fold_results:
@@ -488,12 +527,22 @@ def _run_time_series_pipeline(
         stats_summary=ts_stats_summary if ts_stats_summary else None,
     )
 
+    _ts_total.stop()
+    preprocessor["timing"] = {
+        "total_seconds":        round(_ts_total.elapsed, 3),
+        "data_loading_seconds": round(_ts_data.elapsed, 3),
+        "optimization_seconds": round(_ts_opt_elapsed, 3),
+        "models":               _ts_model_timings,
+    }
+
     if tracker is not None:
         tracker.log_metrics(results_df)
         if ts_opt_results:
             tracker.log_optimization(ts_opt_results)
         if ts_stats_summary:
             tracker.log_stats(ts_stats_summary)
+        if _ts_diag:
+            tracker.log_diagnostics(_ts_diag)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,
@@ -577,6 +626,8 @@ def run_benchmark(
     experiment_name=None,
     # ── Optional: statistical comparison ──────────────────────────
     compute_stats=False,
+    # ── Optional: logging ──────────────────────────────────────────
+    log_level="info",
 ):
     """
     Full benchmark pipeline: load → preprocess → (imbalance) → (optimize) →
@@ -661,6 +712,11 @@ def run_benchmark(
         classification) pairwise McNemar tests between all model pairs.
         Results stored under preprocessor["stats_summary"]. Default False.
 
+    log_level : str
+        Logging verbosity: "debug", "info", "warning", or "error".
+        Controls both console output (when verbose=True) and the benchmark.log
+        file written to output_dir. Default "info".
+
     Returns
     -------
     results_df   : pd.DataFrame
@@ -671,6 +727,9 @@ def run_benchmark(
         {model_name: pd.DataFrame} with ranked feature importance.
         When experiment_name is set, also contains key "experiment":
         {"run_id": str, "run_dir": str}.
+        Always contains key "timing": {total_seconds, data_loading_seconds,
+        optimization_seconds, models: {name: seconds}}.
+        For supervised tasks, contains key "diagnostics": data-quality report.
     """
     if task not in _SUPPORTED_TASKS:
         raise NotImplementedError(
@@ -702,13 +761,19 @@ def run_benchmark(
         )
         stratify = False
 
-    def _log(msg):
-        if verbose:
-            print(msg)
-
     # ── Output directory ───────────────────────────────────────────────────
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    # ── Logger (file + optional console) ──────────────────────────────────
+    from src.logging_utils import Timer, get_logger, run_diagnostics
+    _logger = get_logger(
+        "ml_benchmark",
+        level=log_level,
+        log_file=out / "benchmark.log",
+        console=verbose,
+    )
+    _log = _logger.info
 
     # ── Time-series task — separate pipeline, returns early ────────────────
     if task == "time_series":
@@ -735,7 +800,12 @@ def run_benchmark(
         )
 
     # ── Data ───────────────────────────────────────────────────────────────
+    _total_timer = Timer()
+    _total_timer.start()
+
     _log(f"[data]    Loading: {csv_path}")
+    _data_timer = Timer()
+    _data_timer.start()
     X_train, X_test, y_train, y_test, preprocessor = load_and_preprocess(
         csv_path,
         target_col,
@@ -745,6 +815,7 @@ def run_benchmark(
         random_state=random_state,
         stratify=stratify,
     )
+    _data_timer.stop()
     n_classes    = preprocessor["n_classes"]
     task_is_reg  = (task == "regression")
     task_is_unsup = (task == "unsupervised")
@@ -762,6 +833,26 @@ def run_benchmark(
             test_size=X_test.shape[0],
             target_col=target_col,
         )
+
+    # ── Diagnostics (supervised tasks only) ───────────────────────────────
+    _diag = {}
+    if not task_is_unsup:
+        try:
+            _diag = run_diagnostics(
+                X_train, X_test, y_train, y_test,
+                feature_names=preprocessor.get("feature_names"),
+                task=task,
+            )
+            preprocessor["diagnostics"] = _diag
+            (out / "diagnostics_summary.json").write_text(
+                json.dumps(_diag, indent=2, default=str), encoding="utf-8"
+            )
+            if _diag["has_issues"]:
+                _log(f"[diag]    {len(_diag['issue_summary'])} issue(s) detected:")
+                for _issue in _diag["issue_summary"]:
+                    _log(f"[diag]      {_issue}")
+        except Exception:
+            pass
 
     # Combined ROC/PR curves are only valid for binary classification.
     # Multiclass requires OvR decomposition — deferred to a future release.
@@ -822,10 +913,13 @@ def run_benchmark(
     else:
         _effective_space = None                    # None → build defaults per model
 
-    opt_results = {}  # {model_name: optimize_model() result}
+    opt_results   = {}   # {model_name: optimize_model() result}
+    _opt_elapsed  = 0.0
 
     if _do_optimize:
         from src.optimization import build_search_space, optimize_model
+        _opt_timer = Timer()
+        _opt_timer.start()
         _log(
             f"[optim]   {optimization_method} search  cv={cv_for_search}  "
             f"n_iter={n_iter} ..."
@@ -857,6 +951,8 @@ def run_benchmark(
                 f"duration={opt_result['search_duration']:.1f}s  "
                 f"params={opt_result['best_params']}"
             )
+        _opt_timer.stop()
+        _opt_elapsed = _opt_timer.elapsed
 
     # ── Plot initialisation ────────────────────────────────────────────────
     # Always initialise to None; set only when binary so the finalize block
@@ -874,12 +970,15 @@ def run_benchmark(
     pca_paths      = {}  # {name: Path}  PCA variance         (unsupervised)
 
     # ── Per-model loop ─────────────────────────────────────────────────────
-    results  = []
-    y_preds  = {}   # {name: ndarray} — populated for compute_stats
+    results       = []
+    y_preds       = {}   # {name: ndarray} — populated for compute_stats
+    _model_timings = {}
 
     _log(f"[models]  Running {len(models_dict)} model(s) ...")
     for name, model in models_dict.items():
         _log(f"  {name:<30}")
+        _m_timer = Timer()
+        _m_timer.start()
 
         if task_is_unsup:
             metrics, labels = _run_unsupervised(name, model, X_train)
@@ -899,6 +998,8 @@ def run_benchmark(
             )
             y_preds[name] = y_pred
 
+        _m_timer.stop()
+        _model_timings[name] = round(_m_timer.elapsed, 3)
         results.append({"Model": name, **metrics})
 
         safe = name.replace(" ", "_")
@@ -1002,6 +1103,15 @@ def run_benchmark(
         preprocessor["stats_summary"] = stats_summary
         _log(f"[stats]   Bootstrap CIs computed for {len(ci_results)} model(s).")
 
+    # ── Timing summary ────────────────────────────────────────────────────
+    _total_timer.stop()
+    preprocessor["timing"] = {
+        "total_seconds":        round(_total_timer.elapsed, 3),
+        "data_loading_seconds": round(_data_timer.elapsed, 3),
+        "optimization_seconds": round(_opt_elapsed, 3),
+        "models":               _model_timings,
+    }
+
     # ── Optional: experiment tracking ─────────────────────────────────────
     if tracker is not None:
         tracker.log_metrics(results_df)
@@ -1009,6 +1119,8 @@ def run_benchmark(
             tracker.log_optimization(opt_results)
         if stats_summary:
             tracker.log_stats(stats_summary)
+        if _diag:
+            tracker.log_diagnostics(_diag)
         tracker.save()
         preprocessor["experiment"] = {
             "run_id":  tracker.run_id,

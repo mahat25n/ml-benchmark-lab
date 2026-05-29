@@ -137,6 +137,7 @@ class ExperimentTracker:
         self._metrics      = None   # pd.DataFrame or None
         self._optimization = {}     # {model_name: {best_params, best_score, …}}
         self._stats        = {}     # statistical summary from compute_stats
+        self._diagnostics  = {}     # data-quality diagnostics from run_diagnostics
 
     # ----------------------------------------------------------------
     # Logging helpers
@@ -188,6 +189,18 @@ class ExperimentTracker:
         if isinstance(stats_summary, dict):
             self._stats = stats_summary
 
+    def log_diagnostics(self, diagnostics):
+        """
+        Store data-quality diagnostics produced by run_diagnostics().
+
+        Parameters
+        ----------
+        diagnostics : dict
+            Output of logging_utils.run_diagnostics().
+        """
+        if isinstance(diagnostics, dict):
+            self._diagnostics = diagnostics
+
     def log_optimization(self, optimization_results):
         """
         Store per-model hyperparameter optimization results.
@@ -236,6 +249,7 @@ class ExperimentTracker:
         self._save_metrics()
         self._save_environment(env)
         self._save_summary(env)
+        self._save_diagnostics()
 
     def _save_config(self):
         payload = {
@@ -246,6 +260,7 @@ class ExperimentTracker:
             "models":          self._models,
             "optimization":    self._optimization,
             "stats_summary":   self._stats,
+            "diagnostics":     self._diagnostics,
         }
         (self.run_dir / "config.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -271,6 +286,12 @@ class ExperimentTracker:
             "\n".join(lines), encoding="utf-8"
         )
 
+    def _save_diagnostics(self):
+        if self._diagnostics:
+            (self.run_dir / "diagnostics_summary.json").write_text(
+                json.dumps(self._diagnostics, indent=2, default=str), encoding="utf-8"
+            )
+
     def _save_summary(self, env):
         payload = {
             "experiment_name":      self.experiment_name,
@@ -281,6 +302,7 @@ class ExperimentTracker:
             "models":               self._models,
             "n_models_optimized":   len(self._optimization),
             "has_stats_summary":    bool(self._stats),
+            "has_diagnostic_issues": bool(self._diagnostics.get("has_issues", False)),
             "framework": {
                 "ml_benchmark_lab": env["packages"].get("ml-benchmark-lab", "unknown"),
                 "python":           env["python_version"].split()[0],

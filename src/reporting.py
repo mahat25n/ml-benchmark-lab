@@ -427,6 +427,73 @@ def export_results_word(
 
 
 # ================================================================
+# EXPERIMENT ANALYSIS EXPORT
+# ================================================================
+
+
+def export_analysis_word(summary, save_path, *, title="Experiment Analysis Report"):
+    """
+    Export experiment history analysis to a Word document.
+
+    Writes a formatted ``.docx`` with three sections:
+    1. Experiment Summary (key stats)
+    2. Aggregate Results (per-model table)
+    3. Run Timeline (best-model-per-run table, up to 30 rows)
+
+    Parameters
+    ----------
+    summary   : dict  Output of summarize_experiment_history().
+    save_path : str or Path
+    title     : str   Report title heading.
+    """
+    import pandas as _pd
+
+    doc = Document()
+
+    # ── Title ──────────────────────────────────────────────────────────────
+    doc.add_heading(title, level=0)
+
+    # ── Experiment Summary ──────────────────────────────────────────────────
+    doc.add_heading("Experiment Summary", level=1)
+    p = doc.add_paragraph()
+    p.add_run(f"Total runs: ").bold = True
+    p.add_run(f"{summary.get('n_runs', 0)}\n")
+    p.add_run("Experiments: ").bold = True
+    p.add_run(f"{summary.get('n_experiments', 0)}\n")
+    if summary.get("experiment_names"):
+        p.add_run("Experiment names: ").bold = True
+        p.add_run(f"{', '.join(summary['experiment_names'])}\n")
+    p.add_run("Metric: ").bold = True
+    p.add_run(f"{summary.get('metric', '')}\n")
+    if summary.get("best_model"):
+        p.add_run("Best overall model: ").bold = True
+        p.add_run(f"{summary['best_model']}\n")
+
+    # ── Aggregate Results ──────────────────────────────────────────────────
+    agg = summary.get("aggregate", _pd.DataFrame())
+    if not agg.empty:
+        doc.add_heading("Aggregate Results", level=1)
+        _add_word_table(doc, agg)
+
+    # ── Experiment Comparison ──────────────────────────────────────────────
+    comp = summary.get("comparison", _pd.DataFrame())
+    if not comp.empty:
+        doc.add_heading("Experiment Comparison", level=1)
+        comp_reset = comp.reset_index()
+        _add_word_table(doc, comp_reset)
+
+    # ── Run Timeline ───────────────────────────────────────────────────────
+    tl = summary.get("timeline", _pd.DataFrame())
+    if not tl.empty:
+        doc.add_heading("Run Timeline", level=1)
+        cols = ["run_id", "experiment_name", "best_model", "best_score"]
+        present_cols = [c for c in cols if c in tl.columns]
+        _add_word_table(doc, tl[present_cols].head(30))
+
+    doc.save(str(save_path))
+
+
+# ================================================================
 # FUTURE: ADDITIONAL EXPORT FORMATS  (not yet implemented)
 # ================================================================
 #

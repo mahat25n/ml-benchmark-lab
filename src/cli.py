@@ -143,6 +143,8 @@ def _cmd_examples(_args):
          "Diebold-Mariano forecasting comparison"),
         ("logging_diagnostics_example.py",
          "Logging, timing, and data-quality diagnostics"),
+        ("experiment_analysis_example.py",
+         "Experiment aggregation and benchmark analytics"),
     ]
 
     print("Available examples  (run with: python examples/<name>)\n")
@@ -157,6 +159,63 @@ def _cmd_examples(_args):
         "  python examples/classification_example.py\n"
         "  python examples/time_series_example.py"
     )
+
+
+def _cmd_analyze(args):
+    """Aggregate and summarize experiment history from persisted run artifacts."""
+    from src.experiment_analysis import summarize_experiment_history
+    from src.reporting import export_analysis_word
+
+    export_formats = (
+        [f.strip() for f in args.export_formats.split(",")]
+        if args.export_formats
+        else []
+    )
+
+    out = args.output_dir
+
+    try:
+        summary = summarize_experiment_history(
+            args.base_dir,
+            experiment_name=args.experiment_name or None,
+            metric=args.metric or None,
+            export_dir=out if export_formats or args.plots else None,
+            plots_dir=out if args.plots else None,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Console output
+    n = summary["n_runs"]
+    ne = summary["n_experiments"]
+    if n == 0:
+        print("No experiment runs found under the specified base directory.")
+        return
+
+    print(f"Loaded {n} run(s) from {ne} experiment(s)")
+    print(f"Metric : {summary['metric']}")
+    if summary["best_model"]:
+        print(f"Best   : {summary['best_model']}")
+    print()
+
+    agg = summary["aggregate"]
+    if not agg.empty:
+        print(agg.to_string(index=False))
+
+    # Optional CSV / JSON export (already done inside summarize when export_dir is set)
+    if "csv" in export_formats or "json" in export_formats:
+        print(f"\nExports written to: {out}")
+
+    # Optional Word export
+    if "word" in export_formats:
+        from pathlib import Path
+        p = Path(out) / "analysis_report.docx"
+        try:
+            export_analysis_word(summary, p, title="Experiment Analysis Report")
+            print(f"Word report : {p}")
+        except Exception as exc:
+            print(f"warning: Word export failed — {exc}", file=sys.stderr)
 
 
 def _cmd_version(_args):
@@ -186,6 +245,7 @@ def _build_parser():
             "  ml-benchmark run ts.csv value --task time_series --lags 1,2,3\n"
             "  ml-benchmark run churn.csv Churn --optimize --experiment-name exp01\n"
             "  ml-benchmark run churn.csv Churn --compute-stats --export word\n"
+            "  ml-benchmark analyze --base-dir outputs --experiment-name exp01\n"
             "  ml-benchmark info\n"
             "  ml-benchmark examples\n"
             "  ml-benchmark version\n"
@@ -325,6 +385,46 @@ def _build_parser():
         help="List available example scripts with descriptions.",
     )
     examples_p.set_defaults(func=_cmd_examples)
+
+    # ── analyze ──────────────────────────────────────────────────────────────
+    analyze_p = sub.add_parser(
+        "analyze",
+        help="Aggregate and compare results across experiment runs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Load all persisted benchmark runs, compute per-model statistics\n"
+            "across runs (mean, std, win rate, avg rank), and optionally export\n"
+            "results and plots."
+        ),
+    )
+    analyze_p.add_argument(
+        "--base-dir", default="outputs", dest="base_dir", metavar="DIR",
+        help="Root output directory to scan for experiment runs (default: outputs).",
+    )
+    analyze_p.add_argument(
+        "--experiment-name", default=None, dest="experiment_name", metavar="NAME",
+        help="Filter to a single experiment name. Scans all experiments when omitted.",
+    )
+    analyze_p.add_argument(
+        "--metric", default=None, metavar="METRIC",
+        help=(
+            "Metric column to aggregate (e.g. Accuracy, R2, MAE). "
+            "Inferred from task when omitted."
+        ),
+    )
+    analyze_p.add_argument(
+        "--output-dir", default="outputs", dest="output_dir", metavar="DIR",
+        help="Directory for exported files and plots (default: outputs).",
+    )
+    analyze_p.add_argument(
+        "--export", default=None, dest="export_formats", metavar="FMT",
+        help="Comma-separated export formats: csv, json, word  (e.g. csv,word).",
+    )
+    analyze_p.add_argument(
+        "--plots", action="store_true", default=False,
+        help="Save analysis plots (win frequency, avg rank, distribution, timeline).",
+    )
+    analyze_p.set_defaults(func=_cmd_analyze)
 
     # ── version ──────────────────────────────────────────────────────────────
     version_p = sub.add_parser(

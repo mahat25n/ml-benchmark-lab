@@ -153,6 +153,27 @@ from src.experiment import (
 # ── Logging and diagnostics ─────────────────────────────────────────
 from src.logging_utils import Timer, capture_warnings, get_logger, run_diagnostics
 
+# ── Experiment analysis ───────────────────────────────────────────
+from src.experiment_analysis import (
+    aggregate_experiments,
+    compare_experiments,
+    export_aggregate_csv,
+    export_aggregate_json,
+    load_experiments,
+    summarize_experiment_history,
+)
+
+# ── Analysis reporting ────────────────────────────────────────────
+from src.reporting import export_analysis_word
+
+# ── Analysis plots ────────────────────────────────────────────────
+from src.plots import (
+    plot_model_win_frequency,
+    plot_average_rank,
+    plot_metric_distribution,
+    plot_experiment_timeline,
+)
+
 
 __all__ = [
     # Version
@@ -221,4 +242,12 @@ __all__ = [
     "ExperimentTracker", "generate_run_id", "set_global_seed", "capture_environment",
     # Logging and diagnostics
     "get_logger", "Timer", "capture_warnings", "run_diagnostics",
+    # Experiment analysis
+    "load_experiments", "aggregate_experiments", "compare_experiments",
+    "summarize_experiment_history",
+    "export_aggregate_csv", "export_aggregate_json",
+    # Analysis reporting / plots
+    "export_analysis_word",
+    "plot_model_win_frequency", "plot_average_rank",
+    "plot_metric_distribution", "plot_experiment_timeline",
 ]

@@ -658,6 +658,168 @@ def plot_confidence_intervals(ci_df, metric, title, save_path):
 
 
 # ================================================================
+# EXPERIMENT ANALYSIS PLOTS
+# ================================================================
+
+
+def plot_model_win_frequency(win_data, title, save_path):
+    """
+    Horizontal bar chart of how many benchmark runs each model ranked #1.
+
+    Parameters
+    ----------
+    win_data  : dict or pd.Series  {model_name: win_count}
+    title     : str
+    save_path : str or Path
+    """
+    if hasattr(win_data, "sort_values"):
+        # pandas Series
+        s_sorted = win_data.sort_values(ascending=True)
+        names    = list(s_sorted.index)
+        values   = list(s_sorted.values)
+    else:
+        # plain dict
+        pairs  = sorted(win_data.items(), key=lambda kv: kv[1])
+        names  = [k for k, _ in pairs]
+        values = [v for _, v in pairs]
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    y_pos = np.arange(len(names))
+    ax.barh(y_pos, values, color="#1F4E79", alpha=0.85)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(names, fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_xlabel("Win Count (# runs ranked #1)", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="x", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_average_rank(rank_series, title, save_path):
+    """
+    Horizontal bar chart of each model's average rank across benchmark runs.
+
+    Lower rank = better. The best-ranked model is shown at the top.
+
+    Parameters
+    ----------
+    rank_series : pd.Series  index=model_name, values=avg_rank (float)
+    title       : str
+    save_path   : str or Path
+    """
+    s = rank_series.sort_values(ascending=False)  # best (lowest rank) at top
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    y_pos = np.arange(len(s))
+    ax.barh(y_pos, s.values, color="#2E86AB", alpha=0.85)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(list(s.index), fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_xlabel("Average Rank (1 = best)", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="x", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_metric_distribution(distribution_df, metric_name, title, save_path):
+    """
+    Box plot of a metric's distribution across runs for each model.
+
+    Parameters
+    ----------
+    distribution_df : pd.DataFrame
+        Columns = model names. Each row = one benchmark run.
+        NaN cells are ignored.
+    metric_name     : str   Label for the y-axis.
+    title           : str
+    save_path       : str or Path
+    """
+    models = list(distribution_df.columns)
+    data   = [distribution_df[m].dropna().values for m in models]
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    bp = ax.boxplot(
+        data,
+        vert=True,
+        patch_artist=True,
+        tick_labels=models,
+        medianprops={"color": "black", "linewidth": 1.5},
+    )
+
+    colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+
+    ax.set_ylabel(metric_name, fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"],
+                   rotation=15 if len(models) > 4 else 0)
+    ax.tick_params(axis="y", labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="y", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_experiment_timeline(timeline_df, metric, title, save_path):
+    """
+    Line/scatter plot of the best model's score for each benchmark run over time.
+
+    Runs are sorted by run_id. Each experiment_name group is plotted as a
+    separate line when multiple experiments are present.
+
+    Parameters
+    ----------
+    timeline_df : pd.DataFrame
+        Must contain: run_index (int), best_score (float),
+        experiment_name (str), best_model (str).
+    metric      : str   Y-axis label.
+    title       : str
+    save_path   : str or Path
+    """
+    df = timeline_df.copy()
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+
+    exp_names = df["experiment_name"].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(exp_names), 1)))
+
+    for exp, color in zip(exp_names, colors):
+        sub = df[df["experiment_name"] == exp].sort_values("run_index")
+        label = str(exp) if len(exp_names) > 1 else "_nolegend_"
+        ax.plot(
+            sub["run_index"], sub["best_score"],
+            marker="o",
+            markersize=DEFAULT_PLOTTING["marker_size"],
+            linewidth=DEFAULT_PLOTTING["line_width"],
+            label=label,
+            color=color,
+        )
+
+    ax.set_xlabel("Run Index", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_ylabel(f"Best {metric}", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+
+    if len(exp_names) > 1:
+        ax.legend(fontsize=DEFAULT_PLOTTING["legend_font_size"])
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+# ================================================================
 # FUTURE PLOTS  (not yet implemented)
 # ================================================================
 #

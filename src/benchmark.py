@@ -690,6 +690,18 @@ def run_benchmark(
     n_iter          : int
         Number of parameter combinations sampled by random search. Default 20.
 
+    feature_selection : str or None
+        When provided, apply feature selection before model training.
+        Valid methods: "variance", "correlation", "mutual_information",
+        "rfecv", "lasso". Results stored under preprocessor["feature_selection"].
+        Not applied to unsupervised or time-series tasks. Default None.
+    n_features : int or None
+        Number of features to keep (forwarded to methods that support it,
+        e.g. mutual_information). Default None (method decides).
+    feature_selection_kwargs : dict or None
+        Extra keyword arguments forwarded to the selected feature selection
+        method (e.g. {"threshold": 0.95} for correlation). Default None.
+
     compute_importance : bool
         When True, compute feature importance for every model after the
         evaluation loop. Results stored under preprocessor["importance"].

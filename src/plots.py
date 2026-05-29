@@ -1101,15 +1101,9 @@ def plot_selected_features_summary(result, title, save_path):
 # FUTURE PLOTS  (not yet implemented)
 # ================================================================
 #
-# SHAP:
-#   plot_shap_summary(shap_values, X, feature_names, save_path, max_display=20)
+# SHAP — partial:
 #   plot_shap_waterfall(shap_values, sample_idx, save_path)
-#   plot_shap_dependence(shap_values, feature_name, X, save_path)
 #
 # Calibration:
 #   plot_calibration_curve(y_true, y_prob, name, save_path, n_bins=10)
 #   plot_calibration_comparison(calibration_data, save_path, n_bins=10)
-#
-# Feature Importance:
-#   plot_feature_importance(importances, feature_names, save_path, top_n=20)
-#   plot_permutation_importance(result, feature_names, save_path, top_n=20)

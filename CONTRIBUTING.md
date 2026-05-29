@@ -57,9 +57,15 @@ code, confirm which module it belongs in:
 | Cross-validation strategy construction | `validation.py` |
 | Hyperparameter search | `optimization.py` |
 | Resampling | `imbalance.py` |
+| Feature selection | `feature_selection.py` |
 | Feature importance, SHAP | `explainability.py` |
 | Statistical tests | `stats.py` |
 | File export (CSV, Excel, Word) | `reporting.py` |
+| Experiment tracking (local filesystem) | `experiment.py` |
+| Experiment aggregation and analytics | `experiment_analysis.py` |
+| Dataset profiling and automated reports | `data_profile.py` |
+| Model persistence and batch inference | `model_io.py` |
+| Logging, timing, and data-quality diagnostics | `logging_utils.py` |
 | End-to-end orchestration | `benchmark.py` |
 | Centralized defaults | `config.py` |
 
@@ -95,9 +101,9 @@ code, confirm which module it belongs in:
 ## Pull request checklist
 
 - [ ] Tests added or updated for the changed code
-- [ ] All 256 existing tests still pass (`pytest`)
+- [ ] All existing tests still pass (`pytest`)
 - [ ] `ruff check src/` passes with no errors
-- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] `CHANGELOG.md` updated with the new version entry
 - [ ] No new hard dependencies added without discussion
 
 ## Reporting a bug

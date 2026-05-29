@@ -7,6 +7,143 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.0] - 2026-05-29
+
+### Added
+
+**Feature selection** (`src/feature_selection.py`)
+- `variance_threshold_selection` — removes constant / low-variance features
+- `correlation_selection` — greedy removal of highly correlated feature pairs
+- `mutual_information_selection` — top-k features by mutual information score
+- `rfecv_selection` — recursive feature elimination with cross-validation
+- `lasso_selection` — non-zero coefficients from L1-regularised model
+- `run_feature_selection` — unified dispatcher for all five methods
+- Standard result dict: `selected_features`, `removed_features`, `selected_mask`, `scores`
+- `run_benchmark` parameters: `feature_selection=`, `n_features=`, `feature_selection_kwargs=`
+- Saves `fs_feature_scores.png` and `fs_selection_summary.png` to output directory
+- 56 tests in `tests/test_feature_selection.py`
+
+**Model persistence and inference** (`src/model_io.py`)
+- `save_model` / `load_model` — joblib serialisation with `model_metadata.json`
+- `save_pipeline` / `load_pipeline` — bundled estimator + preprocessor dict
+- `predict_from_csv` — load CSV → apply preprocessing → run inference → optional CSV output
+- `batch_predict` — chunked inference on large numpy arrays; accepts path or live estimator
+- `save_model_for_run` — writes into an experiment run directory
+- Metadata tracks: model type, training timestamp, feature names, framework versions
+- CLI: `ml-benchmark save-model`, `ml-benchmark predict`
+- 53 tests in `tests/test_model_io.py`
+- `examples/model_persistence_example.py`
+
+**Dataset profiling** (`src/data_profile.py`)
+- `profile_dataset` — accepts CSV path or DataFrame; exports JSON + CSV
+- `summarize_columns` — per-column stats: kind, missing, cardinality, mean, skewness, kurtosis, percentiles
+- `summarize_target` — binary / multiclass / continuous classification + imbalance ratio
+- `summarize_missingness` — per-column pattern: complete / partial / mostly_missing
+- `plot_missing_heatmap`, `plot_class_distribution`, `plot_numeric_distributions`
+- CLI: `ml-benchmark profile`
+- `ExperimentTracker.log_profile` integration
+- 83 tests in `tests/test_data_profile.py`
+- `examples/data_profile_example.py`
+
+**Experiment aggregation and analytics** (`src/experiment_analysis.py`)
+- `load_experiments` — scans persisted run directories
+- `aggregate_experiments` — mean, std, win rate, average rank per model
+- `compare_experiments` — wide pivot table by experiment group
+- `summarize_experiment_history` — full pipeline with optional CSV / JSON / Word export
+- `plot_model_win_frequency`, `plot_average_rank`, `plot_metric_distribution`, `plot_experiment_timeline`
+- `export_aggregate_csv`, `export_aggregate_json`
+- CLI: `ml-benchmark analyze`
+- `export_analysis_word` in `reporting.py`
+- 55 tests in `tests/test_experiment_analysis.py`
+- `examples/experiment_analysis_example.py`
+
+**Feature selection plots** (`src/plots.py`)
+- `plot_feature_importance_ranking` — horizontal bar chart of feature scores
+- `plot_selected_features_summary` — selected vs. removed count bar chart
+
+### Changed
+- `pyproject.toml`: version `1.0.0`; Development Status `5 - Production/Stable`; description and keywords updated
+- `src/__init__.py`: version `1.0.0`; docstring updated; all new public symbols exported
+
+---
+
+## [0.6.0] - 2026-05-28
+
+### Added
+
+**Advanced logging and diagnostics** (`src/logging_utils.py`)
+- `get_logger` — file + console logger with configurable level
+- `Timer` — context-manager and manual start/stop elapsed timing
+- `capture_warnings` — redirect Python warnings to the logger
+- `run_diagnostics` — data-quality checks: NaN/Inf, class imbalance, feature scale, train/test distribution shift
+- `run_benchmark` parameters: `log_level=`
+- `ExperimentTracker.log_diagnostics` integration
+- CLI: `--log-level debug/info/warning/error` for `ml-benchmark run`
+- 52 tests in `tests/test_logging_utils.py`
+- `examples/logging_diagnostics_example.py`
+
+---
+
+## [0.5.0] - 2026-05-27
+
+### Added
+
+**Experiment aggregation and analytics** (shipped as part of the 1.0.0 block above)
+
+---
+
+## [0.4.0] - 2026-05-26
+
+### Added
+
+**Experiment tracking** (`src/experiment.py`)
+- `ExperimentTracker` — local filesystem run tracking
+- `generate_run_id`, `set_global_seed`, `capture_environment`
+- Writes: `config.json`, `metrics.csv`, `environment.txt`, `experiment_summary.json`
+- `run_benchmark` parameter: `experiment_name=`
+- 42 tests in `tests/test_experiment.py`
+- `examples/experiment_tracking_example.py`
+
+**Advanced statistical testing** (`src/stats.py` extensions)
+- `run_paired_ttest`, `run_corrected_kfold_ttest`
+- `compute_confidence_interval`, `compute_bootstrap_ci`
+- `compute_average_ranks`, `compute_metric_leaderboard`
+- `compute_pairwise_comparisons`, `compute_significance_summary`
+- `compute_cd_nemenyi`, `prepare_cd_diagram_data`
+- `compute_forecast_error_series`, `run_diebold_mariano_test`, `compare_forecast_models`
+- `plot_ranking_bar`, `plot_confidence_intervals`
+- `export_results_word` extended with optimization and statistical analysis sections
+- 89 tests in `tests/test_stats_advanced.py` and `tests/test_forecasting_stats.py`
+- `examples/statistical_comparison_example.py`, `examples/diebold_mariano_example.py`
+
+---
+
+## [0.3.0] - 2026-05-25
+
+### Added
+
+**Time-series support**
+- `create_lag_features`, `create_rolling_features` in `time_series.py`
+- Walk-forward CV: `walk_forward_split`, `rolling_window_split`, `expanding_window_split`
+- `_run_time_series_walk_forward` and `_run_time_series_pipeline` in `benchmark.py`
+- 3 time-series models: LinearRegression, RandomForest, XGBoost
+- `compute_forecast_metrics` — fold-averaged MAE, RMSE, MAPE, SMAPE
+- `plot_forecast`, `plot_rolling_forecast`, `plot_residuals_over_time`
+- `run_benchmark` parameters: `lags=`, `rolling_windows=`, `ts_n_splits=`, `ts_horizon=`
+- CLI: `--lags`, `--ts-n-splits`, `--ts-horizon` flags for `ml-benchmark run`
+- 60 tests in `tests/test_time_series.py`
+- `examples/time_series_example.py`
+
+**Hyperparameter optimization** (`src/optimization.py`)
+- `run_grid_search`, `run_random_search`, `optimize_model`
+- `build_search_space`, `DEFAULT_SEARCH_SPACES`, `validate_search_space`
+- `run_benchmark` parameters: `optimize=`, `optimization_method=`, `n_iter=`, `cv_strategy=`
+- CLI: `--optimize`, `--optimization-method`, `--n-iter`, `--cv-strategy`
+- 49 tests in `tests/test_optimization.py`
+- `examples/optimization_example.py`
+
+---
+
 ## [0.2.0] - 2025-05-28
 
 ### Added

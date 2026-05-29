@@ -8,8 +8,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name        = "ml-benchmark-lab"
-version     = "0.2.0"
-description = "Research-grade ML benchmarking framework: classification, regression, unsupervised, SHAP explainability."
+version     = "1.0.0"
+description = "Research-grade ML benchmarking framework: classification, regression, unsupervised, time-series, SHAP explainability, feature selection, model persistence, experiment tracking, and dataset profiling."
 readme      = "README.md"
 license     = {file = "LICENSE"}
 authors     = [{name = "Mahat Ibrahim", email = "mahatibrahim@ihu.edu.tr"}]
@@ -23,18 +23,24 @@ keywords = [
     "regression",
     "clustering",
     "unsupervised",
+    "time-series",
+    "forecasting",
     "explainability",
     "shap",
     "feature-importance",
+    "feature-selection",
     "hyperparameter-optimization",
     "cross-validation",
     "imbalanced-data",
     "statistical-testing",
+    "experiment-tracking",
+    "data-profiling",
+    "model-persistence",
     "reproducibility",
 ]
 
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -110,7 +116,7 @@ ml-benchmark = "src.cli:main"
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["ROADMAP.md", "py.typed"]
+src = ["py.typed"]
 
 # ================================================================
 # TOOL CONFIGURATION

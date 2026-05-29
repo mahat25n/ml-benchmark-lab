@@ -49,9 +49,9 @@ X[:, 11] = X[:, 0] + np.random.default_rng(7).standard_normal(500) * 0.001  # ne
 
 feature_names = [f"feat_{i:02d}" for i in range(X.shape[1])]
 print(f"  Shape          : {X.shape}")
-print(f"  n_informative  : 6  (feat_00 … feat_05)")
+print(f"  n_informative  : 6  (feat_00 - feat_05)")
 print(f"  constant col   : feat_10")
-print(f"  near-duplicate : feat_11 ≈ feat_00")
+print(f"  near-duplicate : feat_11 ~= feat_00")
 print()
 
 

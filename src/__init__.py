@@ -4,11 +4,13 @@ ml-benchmark-lab
 Research-grade ML benchmarking framework.
 
 Supports classification, regression, unsupervised, and time-series tasks
-with modular evaluation, SHAP explainability, statistical testing, and
+with modular evaluation, SHAP explainability, statistical testing,
+hyperparameter optimization, imbalance handling, feature selection,
+model persistence, experiment tracking, dataset profiling, and
 publication-ready export.
 """
 
-__version__ = "0.6.0"
+__version__ = "1.0.0"
 __author__  = "Mahat Ibrahim"
 __email__   = "mahatibrahim@ihu.edu.tr"
 __license__ = "MIT"

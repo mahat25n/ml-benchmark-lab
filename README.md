@@ -3,7 +3,8 @@
 Research-grade machine learning benchmarking framework.
 Supports **classification**, **regression**, **unsupervised**, and **time-series** tasks with modular
 evaluation, SHAP explainability, statistical significance testing, hyperparameter optimization,
-experiment tracking, and publication-ready export.
+feature selection, model persistence, experiment tracking, dataset profiling, and
+publication-ready export.
 
 ---
 
@@ -15,15 +16,20 @@ experiment tracking, and publication-ready export.
 - SHAP explainability: TreeExplainer, LinearExplainer, KernelExplainer with auto-selection
 - Global and local SHAP explanations with beeswarm, bar, and dependence plots
 - Permutation importance as a model-agnostic alternative
+- **Feature selection**: variance threshold, correlation filtering, mutual information, RFECV, Lasso — all sklearn-only
 - Hyperparameter optimization: grid search and randomized search with built-in default search spaces
 - Imbalance handling: SMOTE, ADASYN, SMOTENC, random over/under-sampling
 - Statistical significance testing: McNemar, Wilcoxon, Friedman, paired t-test, corrected k-fold t-test
 - Advanced ranking: average ranks, metric leaderboard, pairwise comparisons, Nemenyi CD
 - Diebold-Mariano test for forecasting accuracy comparison
 - Bootstrap confidence intervals for all tasks
-- Experiment tracking: local filesystem runs with config, metrics, environment, and summary JSON
+- **Experiment tracking**: local filesystem runs with config, metrics, environment, and summary JSON
+- **Experiment analytics**: aggregate results across runs — win rates, average ranks, timelines
+- **Dataset profiling**: per-column stats, missingness analysis, class distribution, skewness/kurtosis
+- **Model persistence**: `save_model`, `load_model`, `save_pipeline`, `load_pipeline`, `predict_from_csv`, `batch_predict`
+- **Logging and diagnostics**: structured logging with `get_logger`, `Timer`, `run_diagnostics`
 - Export: CSV, formatted Excel, Word report with embedded figures and statistical tables
-- CLI: `ml-benchmark run`, `info`, `examples`, `version`
+- CLI: `ml-benchmark run`, `profile`, `analyze`, `save-model`, `predict`, `info`, `examples`, `version`
 - Fully opt-in integrations — the simplest call is two arguments
 
 ---
@@ -64,6 +70,10 @@ After installation (`pip install -e .`) the `ml-benchmark` command is available.
 | Command | Description |
 |---|---|
 | `ml-benchmark run <csv> <target> [options]` | Run a full benchmark pipeline |
+| `ml-benchmark profile <csv> [options]` | Profile a dataset and produce statistical reports |
+| `ml-benchmark analyze [options]` | Aggregate and compare results across experiment runs |
+| `ml-benchmark save-model <model.pkl> [options]` | Save a trained model to a directory |
+| `ml-benchmark predict <csv> <model_path> [options]` | Run batch inference on a CSV |
 | `ml-benchmark info` | Print version, models, and capabilities |
 | `ml-benchmark examples` | List available example scripts |
 | `ml-benchmark version` | Print the package version |
@@ -110,6 +120,7 @@ Time-series extras:
   --ts-horizon INT    Test-window size per fold  (default: auto)
 
 Output:
+  --log-level         debug | info | warning | error  (default: info)
   --quiet             Suppress all progress output
 ```
 
@@ -130,6 +141,18 @@ ml-benchmark run churn.csv Churn --optimize --experiment-name churn_v1
 
 # Quiet mode (no progress, just results) with Excel export
 ml-benchmark run data.csv target --export excel --quiet
+
+# Profile a dataset before benchmarking
+ml-benchmark profile data.csv --target label --plots
+
+# Aggregate results from multiple experiment runs
+ml-benchmark analyze --base-dir outputs --experiment-name churn_v1
+
+# Save a trained model from a run directory
+ml-benchmark save-model outputs/model.pkl --output-dir saved/
+
+# Batch predict on new data
+ml-benchmark predict new_data.csv saved/ --output-path predictions.csv
 
 # Show all capabilities
 ml-benchmark info
@@ -202,6 +225,19 @@ print(results_df[["Model", "MAE", "RMSE", "MAPE", "SMAPE", "n_folds"]])
 # preprocessor["stats_summary"]["dm_mae"] — DM test results
 ```
 
+### With feature selection
+
+```python
+results_df, preprocessor = run_benchmark(
+    "data.csv", "target",
+    feature_selection="mutual_information",
+    n_features=10,
+)
+fs = preprocessor["feature_selection"]
+print(f"Selected {fs['n_after']} of {fs['n_before']} features")
+print("Kept:", fs["selected_features"])
+```
+
 ### With hyperparameter optimization
 
 ```python
@@ -249,6 +285,45 @@ results_df, preprocessor = run_benchmark(
 ss = preprocessor["stats_summary"]
 # ss["bootstrap_ci"]   — per-model 95% bootstrap confidence intervals
 # ss["mcnemar_pairs"]  — pairwise McNemar test results (classification)
+```
+
+### Dataset profiling
+
+```python
+from src.data_profile import profile_dataset
+
+profile = profile_dataset(
+    "data.csv", target_col="label",
+    output_dir="outputs/profile",
+    plots_dir="outputs/profile/plots",
+)
+print(f"Rows: {profile['n_rows']}, Completeness: {profile['dataset_completeness_pct']:.1f}%")
+print(profile["columns"][["column", "kind", "n_missing", "skewness"]])
+```
+
+### Model persistence
+
+```python
+from src.model_io import save_pipeline, load_pipeline, predict_from_csv
+
+# Save model + preprocessor together
+save_pipeline(fitted_model, preprocessor, "saved_model/")
+
+# Load and predict on new data
+model, prep = load_pipeline("saved_model/")
+predictions = predict_from_csv("new_data.csv", "saved_model/", target_col="label")
+```
+
+### Experiment aggregation
+
+```python
+from src.experiment_analysis import summarize_experiment_history
+
+summary = summarize_experiment_history(
+    "outputs/", experiment_name="churn_v1",
+    export_dir="outputs/analysis", plots_dir="outputs/analysis/plots",
+)
+print(summary["aggregate"][["Model", "mean_Accuracy", "win_pct", "avg_rank"]])
 ```
 
 ### SHAP explainability
@@ -320,16 +395,24 @@ data.py          load_and_preprocess()
     |              - train/test split (stratified or not)
     |
     v
-imbalance.py     apply_sampling()          [optional]
+data_profile.py  profile_dataset()             [optional]
+    |              - per-column stats, missingness, target analysis
+    |
+    v
+feature_selection.py  run_feature_selection()  [optional]
+    |              - variance, correlation, MI, RFECV, Lasso
+    |
+    v
+imbalance.py     apply_sampling()              [optional]
     |              - SMOTE / ADASYN / random over/under
     |
     v
-optimization.py  optimize_model()          [optional]
+optimization.py  optimize_model()              [optional]
     |              - per-model param search before evaluation
     |              - built-in default search spaces
     |
     v
-time_series.py   create_lag_features()     [time_series, optional]
+time_series.py   create_lag_features()         [time_series, optional]
     |              create_rolling_features()
     |
     v
@@ -348,26 +431,35 @@ evaluation.py    compute_*_metrics()
     |              - forecasting:     MAE, RMSE, MAPE, SMAPE (fold-averaged)
     |
     v
-plots.py         plot_confusion_matrix()    [classification]
-    |            plot_actual_vs_predicted()  [regression]
-    |            plot_residuals()            [regression]
-    |            plot_cluster_scatter()      [unsupervised]
-    |            plot_pca_variance()         [unsupervised]
-    |            plot_forecast()             [time_series]
-    |            plot_rolling_forecast()     [time_series]
-    |            plot_residuals_over_time()  [time_series]
-    |            plot_ranking_bar()          [stats]
-    |            plot_confidence_intervals() [stats]
-    |            plot_shap_*()              [explainability]
+plots.py         plot_confusion_matrix()        [classification]
+    |            plot_actual_vs_predicted()      [regression]
+    |            plot_residuals()                [regression]
+    |            plot_cluster_scatter()          [unsupervised]
+    |            plot_pca_variance()             [unsupervised]
+    |            plot_forecast()                 [time_series]
+    |            plot_rolling_forecast()         [time_series]
+    |            plot_residuals_over_time()      [time_series]
+    |            plot_ranking_bar()              [stats]
+    |            plot_confidence_intervals()     [stats]
+    |            plot_shap_*()                   [explainability]
+    |            plot_missing_heatmap()          [data profiling]
+    |            plot_class_distribution()       [data profiling]
+    |            plot_numeric_distributions()    [data profiling]
+    |            plot_feature_importance_ranking() [feature selection]
+    |            plot_selected_features_summary()  [feature selection]
+    |            plot_model_win_frequency()      [experiment analysis]
+    |            plot_average_rank()             [experiment analysis]
+    |            plot_metric_distribution()      [experiment analysis]
+    |            plot_experiment_timeline()      [experiment analysis]
     |
     v
-explainability.py compute_shap_values()    [optional, requires shap]
+explainability.py compute_shap_values()         [optional, requires shap]
     |              summarise_shap_importance()
     |              explain_prediction()
     |              compute_permutation_importance()
     |
     v
-stats.py         run_mcnemar_test()        [optional]
+stats.py         run_mcnemar_test()             [optional]
     |            run_wilcoxon_test()
     |            run_friedman_test()
     |            run_paired_ttest()
@@ -383,19 +475,35 @@ stats.py         run_mcnemar_test()        [optional]
     |
     v
 reporting.py     export_results_csv()
-    |            export_results_excel()    [formatted headers, frozen pane]
-    |            export_results_word()     [title, table, figures, stats]
+    |            export_results_excel()         [formatted headers, frozen pane]
+    |            export_results_word()           [title, table, figures, stats]
+    |            export_analysis_word()          [experiment analysis report]
     |
     v
-experiment.py    ExperimentTracker         [optional]
+experiment.py    ExperimentTracker              [optional]
     |              - config.json, metrics.csv
     |              - environment.txt, experiment_summary.json
+    |              - diagnostics_summary.json, profile_summary.json
     |
     v
-benchmark.py     run_benchmark()           [orchestrates all of the above]
+experiment_analysis.py  summarize_experiment_history()  [optional]
+    |              - aggregate across runs, compare experiments
     |
     v
-cli.py           ml-benchmark run / info / examples / version
+model_io.py      save_model / load_model        [optional]
+    |            save_pipeline / load_pipeline
+    |            predict_from_csv / batch_predict
+    |
+    v
+logging_utils.py get_logger / Timer             [always active]
+    |            run_diagnostics
+    |
+    v
+benchmark.py     run_benchmark()                [orchestrates all of the above]
+    |
+    v
+cli.py           ml-benchmark run / profile / analyze /
+                 save-model / predict / info / examples / version
 ```
 
 ---
@@ -484,6 +592,18 @@ SMAPE uses symmetric denominator `|y_true| + |y_pred|`; returns NaN only when al
 
 ---
 
+## Feature selection methods
+
+| Method | Function | Description |
+|---|---|---|
+| `variance` | `variance_threshold_selection` | Removes constant / low-variance features |
+| `correlation` | `correlation_selection` | Greedy removal of highly correlated pairs |
+| `mutual_information` | `mutual_information_selection` | Top-k features by MI score |
+| `rfecv` | `rfecv_selection` | Optimal count via recursive elimination + CV |
+| `lasso` | `lasso_selection` | Non-zero coefficients from L1-regularised model |
+
+---
+
 ## Supported CV strategies
 
 | Name | Class |
@@ -536,13 +656,9 @@ ml-benchmark-lab/
 ├── README.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-├── .gitignore
-├── .github/
-│   └── workflows/
-│       └── ci.yml          # Python 3.10 / 3.11 / 3.12 matrix CI
 ├── src/
-│   ├── __init__.py         # Public API — all symbols re-exported here  (v0.6.0)
-│   ├── cli.py              # ml-benchmark CLI: run, info, examples, version
+│   ├── __init__.py         # Public API — all symbols re-exported here  (v1.0.0)
+│   ├── cli.py              # ml-benchmark CLI entry point
 │   ├── config.py           # Centralized defaults (plotting, reporting, ...)
 │   ├── data.py             # Loading, encoding, scaling, splitting
 │   ├── models.py           # Model registries (classification / regression / unsupervised / time_series)
@@ -552,9 +668,14 @@ ml-benchmark-lab/
 │   ├── validation.py       # Cross-validation and temporal split strategies
 │   ├── optimization.py     # Grid search and randomized search
 │   ├── imbalance.py        # Resampling strategies
+│   ├── feature_selection.py# Feature selection (variance, correlation, MI, RFECV, Lasso)
 │   ├── explainability.py   # Feature importance, permutation importance, SHAP
 │   ├── stats.py            # Statistical significance tests and ranking utilities
 │   ├── experiment.py       # Experiment tracking (local filesystem)
+│   ├── experiment_analysis.py  # Aggregate and compare experiment runs
+│   ├── data_profile.py     # Dataset profiling and automated reports
+│   ├── model_io.py         # Model persistence and batch inference
+│   ├── logging_utils.py    # Structured logging, timing, data-quality diagnostics
 │   ├── reporting.py        # Export utilities (CSV, Excel, Word)
 │   └── benchmark.py        # End-to-end orchestration pipeline
 ├── tests/
@@ -562,11 +683,16 @@ ml-benchmark-lab/
 │   ├── test_benchmark.py
 │   ├── test_cli.py
 │   ├── test_data.py
+│   ├── test_data_profile.py
 │   ├── test_experiment.py
+│   ├── test_experiment_analysis.py
 │   ├── test_explainability.py
 │   ├── test_explainability_shap.py   # skipped when shap not installed
+│   ├── test_feature_selection.py
 │   ├── test_forecasting_stats.py
 │   ├── test_imbalance.py
+│   ├── test_logging_utils.py
+│   ├── test_model_io.py
 │   ├── test_optimization.py
 │   ├── test_regression.py
 │   ├── test_reporting.py
@@ -580,10 +706,16 @@ ml-benchmark-lab/
     ├── regression_example.py
     ├── unsupervised_example.py
     ├── time_series_example.py
-    ├── explainability_example.py
     ├── optimization_example.py
+    ├── explainability_example.py        # requires: pip install shap
     ├── statistical_comparison_example.py
-    └── diebold_mariano_example.py
+    ├── diebold_mariano_example.py
+    ├── logging_diagnostics_example.py
+    ├── experiment_tracking_example.py
+    ├── experiment_analysis_example.py
+    ├── data_profile_example.py
+    ├── model_persistence_example.py
+    └── feature_selection_example.py
 ```
 
 ---
@@ -598,10 +730,16 @@ python examples/time_series_example.py
 python examples/optimization_example.py
 python examples/statistical_comparison_example.py
 python examples/diebold_mariano_example.py
+python examples/logging_diagnostics_example.py
+python examples/experiment_tracking_example.py
+python examples/experiment_analysis_example.py
+python examples/data_profile_example.py
+python examples/model_persistence_example.py
+python examples/feature_selection_example.py
 python examples/explainability_example.py   # requires: pip install shap
 ```
 
-All outputs are written to `examples/outputs/` and excluded from version control.
+All outputs are written to `examples/outputs/` (or `outputs/`) and excluded from version control.
 
 ---
 
@@ -623,17 +761,23 @@ pytest --cov=src --cov-report=term-missing
 - [x] Classification, regression, unsupervised, time-series benchmarking
 - [x] Hyperparameter optimization (grid search, randomized search, default search spaces)
 - [x] Imbalance handling (SMOTE, ADASYN, SMOTENC, random over/under)
+- [x] Feature selection (variance, correlation, mutual information, RFECV, Lasso)
 - [x] SHAP explainability (TreeExplainer, LinearExplainer, KernelExplainer)
 - [x] Statistical significance testing (McNemar, Wilcoxon, Friedman)
 - [x] Advanced statistical comparison (paired t-test, corrected k-fold t-test, bootstrap CI, average ranks, pairwise comparisons, Nemenyi CD)
 - [x] Diebold-Mariano test for forecast accuracy comparison
 - [x] Experiment tracking (local filesystem, config + metrics + environment + summary)
-- [x] CLI: `ml-benchmark run`, `info`, `examples`, `version`
+- [x] Experiment aggregation and analytics (win rates, average ranks, timelines)
+- [x] Dataset profiling (per-column stats, missingness, class distribution, skewness/kurtosis)
+- [x] Model persistence (save/load model and pipeline, batch inference, predict_from_csv)
+- [x] Logging and diagnostics (structured logging, timing, data-quality checks)
+- [x] CLI: `run`, `profile`, `analyze`, `save-model`, `predict`, `info`, `examples`, `version`
 - [x] Word report with embedded figures, optimization summary, statistical analysis tables
 
 ### Planned — explainability
 - [ ] LIME local explanations
 - [ ] Partial dependence plots (PDP) and individual conditional expectation (ICE) curves
+- [ ] SHAP waterfall plots
 
 ### Planned — optimization
 - [ ] Bayesian optimization via `scikit-optimize`

@@ -998,6 +998,106 @@ def plot_numeric_distributions(df, title, save_path, *, max_cols=12):
 
 
 # ================================================================
+# FEATURE SELECTION PLOTS
+# ================================================================
+
+
+def plot_feature_importance_ranking(scores, title, save_path, *, max_features=30):
+    """
+    Horizontal bar chart ranking features by their selection score.
+
+    Parameters
+    ----------
+    scores       : dict {feature_name: float}   Score for each feature.
+    title        : str
+    save_path    : str or Path
+    max_features : int   Cap on number of bars shown (default 30).
+    """
+    import pathlib
+    # sort descending by score
+    pairs = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:max_features]
+    if not pairs:
+        return
+
+    names  = [p[0] for p in pairs][::-1]   # reverse so highest is on top
+    values = [p[1] for p in pairs][::-1]
+
+    fig_h = max(3, min(14, len(names) * 0.4 + 1.5))
+    fig, ax = plt.subplots(figsize=(8, fig_h))
+
+    colors = ["#2E86AB" if v > 0 else "#C0392B" for v in values]
+    ax.barh(range(len(names)), values, color=colors, alpha=0.85)
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_xlabel("Score", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="x", labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="x", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+
+    pathlib.Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_selected_features_summary(result, title, save_path):
+    """
+    Bar chart summarising selected vs. removed feature counts.
+
+    Shows ``n_after`` (selected) and ``n_removed`` as a stacked bar, with
+    a text annotation listing the first few removed feature names.
+
+    Parameters
+    ----------
+    result    : dict   Output of any feature-selection function.
+    title     : str
+    save_path : str or Path
+    """
+    import pathlib
+    n_kept    = result["n_after"]
+    n_removed = result["n_removed"]
+    method    = result.get("method", "")
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    ax.bar(["Selected", "Removed"], [n_kept, n_removed],
+           color=["#2E86AB", "#E74C3C"], alpha=0.85)
+
+    for bar, count in zip(ax.patches, [n_kept, n_removed]):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(n_kept, n_removed) * 0.01,
+            str(count),
+            ha="center", va="bottom",
+            fontsize=DEFAULT_PLOTTING["font_size"],
+            fontweight="bold",
+        )
+
+    removed_names = result.get("removed_features", [])
+    if removed_names:
+        shown = ", ".join(removed_names[:5])
+        if len(removed_names) > 5:
+            shown += f" … (+{len(removed_names) - 5})"
+        ax.set_xlabel(
+            f"Removed: {shown}",
+            fontsize=DEFAULT_PLOTTING["tick_size"],
+            color="#666666",
+        )
+
+    ax.set_ylabel("Feature count", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(f"{title}  [{method}]", fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="y", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+
+    pathlib.Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+# ================================================================
 # FUTURE PLOTS  (not yet implemented)
 # ================================================================
 #

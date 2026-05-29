@@ -149,6 +149,8 @@ def _cmd_examples(_args):
          "Dataset profiling and automated data reports"),
         ("model_persistence_example.py",
          "Model persistence, pipeline save/load, and batch inference"),
+        ("feature_selection_example.py",
+         "Feature selection methods and benchmark integration"),
     ]
 
     print("Available examples  (run with: python examples/<name>)\n")

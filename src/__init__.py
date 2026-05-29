@@ -200,6 +200,22 @@ from src.model_io import (
     save_model_for_run,
 )
 
+# ── Feature selection ───────────────────────────────────────────────
+from src.feature_selection import (
+    variance_threshold_selection,
+    correlation_selection,
+    mutual_information_selection,
+    rfecv_selection,
+    lasso_selection,
+    run_feature_selection,
+)
+
+# ── Feature selection plots ────────────────────────────────────────
+from src.plots import (
+    plot_feature_importance_ranking,
+    plot_selected_features_summary,
+)
+
 
 __all__ = [
     # Version
@@ -285,4 +301,10 @@ __all__ = [
     "save_pipeline", "load_pipeline",
     "predict_from_csv", "batch_predict",
     "save_model_for_run",
+    # Feature selection
+    "variance_threshold_selection", "correlation_selection",
+    "mutual_information_selection", "rfecv_selection",
+    "lasso_selection", "run_feature_selection",
+    # Feature selection plots
+    "plot_feature_importance_ranking", "plot_selected_features_summary",
 ]

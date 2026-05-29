@@ -611,6 +611,10 @@ def run_benchmark(
     optimization_method="random",
     search_space=None,
     n_iter=20,
+    # ── Optional: feature selection ────────────────────────────────
+    feature_selection=None,
+    n_features=None,
+    feature_selection_kwargs=None,
     # ── Optional: feature importance ───────────────────────────────
     compute_importance=False,
     importance_method="model",
@@ -874,6 +878,46 @@ def run_benchmark(
 
     if tracker is not None:
         tracker.log_models(list(models_dict.keys()))
+
+    # ── Optional: feature selection ────────────────────────────────────────
+    _fs_result = None
+    if feature_selection is not None and not task_is_unsup:
+        from src.feature_selection import run_feature_selection
+        _log(f"[featsel] Running '{feature_selection}' selection ...")
+        _fs_kw = dict(feature_selection_kwargs or {})
+        if n_features is not None:
+            _fs_kw.setdefault("n_features", n_features)
+        try:
+            _fs_result = run_feature_selection(
+                X_train, y_train,
+                feature_names=preprocessor.get("feature_names"),
+                method=feature_selection,
+                task=task,
+                **_fs_kw,
+            )
+            _mask = _fs_result["selected_mask"]
+            X_train = X_train[:, _mask]
+            X_test  = X_test[:, _mask]
+            preprocessor["feature_names"] = _fs_result["selected_features"]
+            preprocessor["feature_selection"] = {
+                k: v for k, v in _fs_result.items() if k != "selected_mask"
+            }
+            _log(
+                f"[featsel] {_fs_result['n_before']} → {_fs_result['n_after']} features "
+                f"(removed {_fs_result['n_removed']})"
+            )
+            if tracker is not None:
+                tracker.log_config(
+                    feature_selection_method=feature_selection,
+                    n_features_before=_fs_result["n_before"],
+                    n_features_after=_fs_result["n_after"],
+                )
+        except Exception as exc:
+            warnings.warn(
+                f"run_benchmark: feature selection failed ({exc}); "
+                "proceeding with all features.",
+                stacklevel=2,
+            )
 
     # ── Optional: imbalance handling ───────────────────────────────────────
     if imbalance_strategy is not None:
@@ -1152,6 +1196,31 @@ def run_benchmark(
                 )
         if importance_results:
             preprocessor["importance"] = importance_results
+
+    # ── Optional: feature selection plots ─────────────────────────────────
+    if _fs_result is not None:
+        try:
+            from src.plots import (
+                plot_feature_importance_ranking,
+                plot_selected_features_summary,
+            )
+            if _fs_result.get("scores"):
+                plot_feature_importance_ranking(
+                    _fs_result["scores"],
+                    f"Feature Scores — {feature_selection}",
+                    out / "fs_feature_scores.png",
+                )
+            plot_selected_features_summary(
+                _fs_result,
+                "Feature Selection Summary",
+                out / "fs_selection_summary.png",
+            )
+            _log("[featsel] Plots saved.")
+        except Exception as exc:
+            warnings.warn(
+                f"run_benchmark: feature selection plots failed ({exc})",
+                stacklevel=2,
+            )
 
     # ── Optional: report export ────────────────────────────────────────────
     roc_path = out / "roc_curve.png"

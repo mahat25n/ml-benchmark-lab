@@ -174,6 +174,21 @@ from src.plots import (
     plot_experiment_timeline,
 )
 
+# ── Dataset profiling ──────────────────────────────────────────────
+from src.data_profile import (
+    profile_dataset,
+    summarize_columns,
+    summarize_target,
+    summarize_missingness,
+)
+
+# ── Profile plots ──────────────────────────────────────────────────
+from src.plots import (
+    plot_missing_heatmap,
+    plot_class_distribution,
+    plot_numeric_distributions,
+)
+
 
 __all__ = [
     # Version
@@ -250,4 +265,8 @@ __all__ = [
     "export_analysis_word",
     "plot_model_win_frequency", "plot_average_rank",
     "plot_metric_distribution", "plot_experiment_timeline",
+    # Dataset profiling
+    "profile_dataset", "summarize_columns", "summarize_target", "summarize_missingness",
+    # Profile plots
+    "plot_missing_heatmap", "plot_class_distribution", "plot_numeric_distributions",
 ]

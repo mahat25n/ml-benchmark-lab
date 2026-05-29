@@ -138,6 +138,7 @@ class ExperimentTracker:
         self._optimization = {}     # {model_name: {best_params, best_score, …}}
         self._stats        = {}     # statistical summary from compute_stats
         self._diagnostics  = {}     # data-quality diagnostics from run_diagnostics
+        self._profile      = {}     # dataset profile from profile_dataset
 
     # ----------------------------------------------------------------
     # Logging helpers
@@ -201,6 +202,36 @@ class ExperimentTracker:
         if isinstance(diagnostics, dict):
             self._diagnostics = diagnostics
 
+    def log_profile(self, profile):
+        """
+        Store a dataset profile produced by data_profile.profile_dataset().
+
+        Only scalar/primitive fields are kept (DataFrames are summarised
+        as counts) so the profile remains JSON-serialisable without
+        embedding large per-column tables inside config.json.
+
+        Parameters
+        ----------
+        profile : dict
+            Output of data_profile.profile_dataset().
+        """
+        if not isinstance(profile, dict):
+            return
+        self._profile = {
+            "n_rows":                   profile.get("n_rows"),
+            "n_cols":                   profile.get("n_cols"),
+            "n_numeric":                profile.get("n_numeric"),
+            "n_categorical":            profile.get("n_categorical"),
+            "n_datetime":               profile.get("n_datetime"),
+            "n_boolean":                profile.get("n_boolean"),
+            "n_duplicate_rows":         profile.get("n_duplicate_rows"),
+            "pct_duplicate_rows":       profile.get("pct_duplicate_rows"),
+            "dataset_completeness_pct": profile.get("dataset_completeness_pct"),
+            "memory_usage_mb":          profile.get("memory_usage_mb"),
+            "target_kind":              (profile.get("target") or {}).get("kind"),
+            "target_imbalance_ratio":   (profile.get("target") or {}).get("imbalance_ratio"),
+        }
+
     def log_optimization(self, optimization_results):
         """
         Store per-model hyperparameter optimization results.
@@ -250,6 +281,7 @@ class ExperimentTracker:
         self._save_environment(env)
         self._save_summary(env)
         self._save_diagnostics()
+        self._save_profile()
 
     def _save_config(self):
         payload = {
@@ -261,6 +293,7 @@ class ExperimentTracker:
             "optimization":    self._optimization,
             "stats_summary":   self._stats,
             "diagnostics":     self._diagnostics,
+            "profile":         self._profile,
         }
         (self.run_dir / "config.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -292,6 +325,12 @@ class ExperimentTracker:
                 json.dumps(self._diagnostics, indent=2, default=str), encoding="utf-8"
             )
 
+    def _save_profile(self):
+        if self._profile:
+            (self.run_dir / "profile_summary.json").write_text(
+                json.dumps(self._profile, indent=2, default=str), encoding="utf-8"
+            )
+
     def _save_summary(self, env):
         payload = {
             "experiment_name":      self.experiment_name,
@@ -303,6 +342,7 @@ class ExperimentTracker:
             "n_models_optimized":   len(self._optimization),
             "has_stats_summary":    bool(self._stats),
             "has_diagnostic_issues": bool(self._diagnostics.get("has_issues", False)),
+            "has_profile":          bool(self._profile),
             "framework": {
                 "ml_benchmark_lab": env["packages"].get("ml-benchmark-lab", "unknown"),
                 "python":           env["python_version"].split()[0],

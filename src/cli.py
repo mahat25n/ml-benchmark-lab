@@ -145,6 +145,8 @@ def _cmd_examples(_args):
          "Logging, timing, and data-quality diagnostics"),
         ("experiment_analysis_example.py",
          "Experiment aggregation and benchmark analytics"),
+        ("data_profile_example.py",
+         "Dataset profiling and automated data reports"),
     ]
 
     print("Available examples  (run with: python examples/<name>)\n")
@@ -159,6 +161,69 @@ def _cmd_examples(_args):
         "  python examples/classification_example.py\n"
         "  python examples/time_series_example.py"
     )
+
+
+def _cmd_profile(args):
+    """Profile a CSV dataset and print a statistical summary."""
+    from src.data_profile import profile_dataset
+
+    na_values = (
+        [v.strip() for v in args.na_values.split(",")]
+        if getattr(args, "na_values", None)
+        else None
+    )
+
+    export_dir = args.output_dir if not args.no_export else None
+    plots_dir  = args.output_dir if args.plots else None
+
+    try:
+        profile = profile_dataset(
+            args.csv_path,
+            target_col=args.target or None,
+            na_values=na_values,
+            output_dir=export_dir,
+            plots_dir=plots_dir,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: input file not found — {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Console output ──────────────────────────────────────────────────────
+    print(f"Dataset      : {args.csv_path}")
+    print(f"Rows         : {profile['n_rows']:,}")
+    print(f"Columns      : {profile['n_cols']}  "
+          f"(numeric={profile['n_numeric']}, "
+          f"categorical={profile['n_categorical']}"
+          + (f", datetime={profile['n_datetime']}" if profile["n_datetime"] else "")
+          + ")")
+    print(f"Duplicate rows: {profile['n_duplicate_rows']} "
+          f"({profile['pct_duplicate_rows']:.1f}%)")
+    print(f"Completeness : {profile['dataset_completeness_pct']:.1f}%")
+    print(f"Memory       : {profile['memory_usage_mb']:.3f} MB")
+
+    if profile.get("target"):
+        t = profile["target"]
+        print(f"\nTarget       : {t['column']}  "
+              f"kind={t['kind']}  n_unique={t['n_unique']}")
+        if t.get("imbalance_ratio") is not None:
+            print(f"  Imbalance ratio: {t['imbalance_ratio']:.4f}")
+        top_classes = list(t.get("value_counts", {}).items())[:5]
+        for cls, cnt in top_classes:
+            pct = t["class_distribution"].get(cls, 0)
+            print(f"  {str(cls):<20} {cnt:>6}  ({pct:.1f}%)")
+
+    print()
+    cols_df = profile["columns"]
+    display_cols = ["column", "dtype", "n_missing", "n_unique", "mean", "skewness"]
+    print(cols_df[display_cols].to_string(index=False))
+
+    if export_dir:
+        print(f"\nExports written to : {export_dir}")
+    if plots_dir:
+        print(f"Plots saved to     : {plots_dir}")
 
 
 def _cmd_analyze(args):
@@ -245,6 +310,7 @@ def _build_parser():
             "  ml-benchmark run ts.csv value --task time_series --lags 1,2,3\n"
             "  ml-benchmark run churn.csv Churn --optimize --experiment-name exp01\n"
             "  ml-benchmark run churn.csv Churn --compute-stats --export word\n"
+            "  ml-benchmark profile data.csv --target label --plots\n"
             "  ml-benchmark analyze --base-dir outputs --experiment-name exp01\n"
             "  ml-benchmark info\n"
             "  ml-benchmark examples\n"
@@ -385,6 +451,41 @@ def _build_parser():
         help="List available example scripts with descriptions.",
     )
     examples_p.set_defaults(func=_cmd_examples)
+
+    # ── profile ──────────────────────────────────────────────────────────────
+    profile_p = sub.add_parser(
+        "profile",
+        help="Profile a CSV dataset and produce statistical reports.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Compute per-column statistics (mean, std, skewness, kurtosis,\n"
+            "cardinality, missingness), analyse the target distribution,\n"
+            "and optionally export profile_summary.json, profile_report.csv,\n"
+            "and three diagnostic plots."
+        ),
+    )
+    profile_p.add_argument("csv_path", help="Path to the input CSV file.")
+    profile_p.add_argument(
+        "--target", default=None, metavar="COL",
+        help="Target column for class-distribution analysis (optional).",
+    )
+    profile_p.add_argument(
+        "--output-dir", default="outputs", dest="output_dir", metavar="DIR",
+        help="Directory for exports and plots (default: outputs).",
+    )
+    profile_p.add_argument(
+        "--na-values", default=None, dest="na_values", metavar="V,V",
+        help="Comma-separated extra NA markers (e.g. '?,N/A').",
+    )
+    profile_p.add_argument(
+        "--plots", action="store_true", default=False,
+        help="Save missing heatmap, class distribution, and numeric histograms.",
+    )
+    profile_p.add_argument(
+        "--no-export", action="store_true", default=False, dest="no_export",
+        help="Skip writing profile_summary.json and profile_report.csv.",
+    )
+    profile_p.set_defaults(func=_cmd_profile)
 
     # ── analyze ──────────────────────────────────────────────────────────────
     analyze_p = sub.add_parser(

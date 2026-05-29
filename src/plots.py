@@ -820,6 +820,184 @@ def plot_experiment_timeline(timeline_df, metric, title, save_path):
 
 
 # ================================================================
+# DATA PROFILE PLOTS
+# ================================================================
+
+
+def plot_missing_heatmap(df, title, save_path, *, max_rows=300):
+    """
+    Heatmap of missing-value patterns across columns.
+
+    Each column with at least one NaN is shown on the y-axis.
+    A sample of up to *max_rows* observations forms the x-axis.
+    Red cells indicate missing values; blue cells indicate present values.
+
+    When the dataset has no missing values a clean "complete" banner is
+    saved instead so the caller always receives a valid PNG.
+
+    Parameters
+    ----------
+    df        : pd.DataFrame   Raw dataset (before any preprocessing).
+    title     : str
+    save_path : str or Path
+    max_rows  : int            Maximum rows to display in the heatmap.
+    """
+    missing_mask = df.isnull()
+    cols_with_missing = [c for c in df.columns if missing_mask[c].any()]
+
+    if not cols_with_missing:
+        fig, ax = plt.subplots(figsize=(8, 2))
+        ax.text(
+            0.5, 0.5,
+            "Dataset complete — no missing values detected",
+            ha="center", va="center",
+            fontsize=12, transform=ax.transAxes,
+        )
+        ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+        ax.axis("off")
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+        plt.close(fig)
+        return
+
+    sample  = missing_mask[cols_with_missing].iloc[:max_rows].astype(int)
+    n_shown = len(sample)
+    n_cols  = len(cols_with_missing)
+    fig_w   = max(6, min(14, n_cols * 1.2))
+    fig_h   = max(3, min(8,  n_cols * 0.5 + 1))
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    sns.heatmap(
+        sample.T,
+        ax=ax,
+        cmap="Reds",
+        vmin=0,
+        vmax=1,
+        cbar=True,
+        cbar_kws={"label": "Missing (1) / Present (0)", "shrink": 0.6},
+        linewidths=0,
+        xticklabels=False,
+    )
+    ax.set_xlabel(
+        f"Observations (sample of {n_shown})",
+        fontsize=DEFAULT_PLOTTING["font_size"],
+    )
+    ax.set_ylabel("Column", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="y", labelsize=DEFAULT_PLOTTING["tick_size"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_class_distribution(value_counts, title, save_path):
+    """
+    Vertical bar chart of class / category frequencies.
+
+    Parameters
+    ----------
+    value_counts : dict or pd.Series  {label: count}
+    title        : str
+    save_path    : str or Path
+    """
+    if hasattr(value_counts, "sort_values"):
+        pairs = list(value_counts.sort_values(ascending=False).items())
+    else:
+        pairs = sorted(value_counts.items(), key=lambda kv: -kv[1])
+
+    labels = [str(k) for k, _ in pairs]
+    counts = [v for _, v in pairs]
+    total  = max(sum(counts), 1)
+
+    fig, ax = plt.subplots(figsize=DEFAULT_PLOTTING["figsize_default"])
+    x_pos = np.arange(len(labels))
+    bars  = ax.bar(x_pos, counts, color="#1F4E79", alpha=0.85)
+
+    # Percentage labels on top of bars
+    for bar, count in zip(bars, counts):
+        pct = count / total * 100
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(counts) * 0.01,
+            f"{pct:.1f}%",
+            ha="center", va="bottom",
+            fontsize=DEFAULT_PLOTTING["tick_size"],
+        )
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(labels, rotation=30 if len(labels) > 6 else 0,
+                       ha="right", fontsize=DEFAULT_PLOTTING["tick_size"])
+    ax.set_ylabel("Count", fontsize=DEFAULT_PLOTTING["font_size"])
+    ax.set_title(title, fontsize=DEFAULT_PLOTTING["title_size"])
+    ax.tick_params(axis="y", labelsize=DEFAULT_PLOTTING["tick_size"])
+    ax.grid(True, axis="y", linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+            alpha=DEFAULT_PLOTTING["grid_alpha"])
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+    plt.close(fig)
+
+
+def plot_numeric_distributions(df, title, save_path, *, max_cols=12):
+    """
+    Grid of histograms — one per numeric column.
+
+    Parameters
+    ----------
+    df       : pd.DataFrame   Only numeric columns are plotted.
+    title    : str            Overall figure title (suptitle).
+    save_path: str or Path
+    max_cols : int            Cap on how many columns to show. Default 12.
+    """
+    num_cols = df.select_dtypes(include="number").columns.tolist()[:max_cols]
+
+    if not num_cols:
+        fig, ax = plt.subplots(figsize=(6, 2))
+        ax.text(0.5, 0.5, "No numeric columns found",
+                ha="center", va="center", fontsize=12, transform=ax.transAxes)
+        ax.axis("off")
+        fig.suptitle(title, fontsize=DEFAULT_PLOTTING["title_size"])
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"])
+        plt.close(fig)
+        return
+
+    n     = len(num_cols)
+    ncols = min(n, 3)
+    nrows = (n + ncols - 1) // ncols
+    fig_w = ncols * 4
+    fig_h = nrows * 3
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h))
+    if n == 1:
+        axes = np.array([axes])
+    axes = np.array(axes).flatten()
+
+    for i, col in enumerate(num_cols):
+        ax  = axes[i]
+        col_data = df[col].dropna()
+        ax.hist(
+            col_data,
+            bins=min(30, max(5, len(col_data) // 10)),
+            color="#2E86AB",
+            alpha=0.8,
+            edgecolor="none",
+        )
+        ax.set_title(col, fontsize=DEFAULT_PLOTTING["font_size"])
+        ax.tick_params(labelsize=DEFAULT_PLOTTING["tick_size"])
+        ax.grid(True, linestyle=DEFAULT_PLOTTING["grid_linestyle"],
+                alpha=DEFAULT_PLOTTING["grid_alpha"])
+
+    # Hide unused axes
+    for j in range(n, len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle(title, fontsize=DEFAULT_PLOTTING["title_size"], y=1.01)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=DEFAULT_PLOTTING["dpi"], bbox_inches="tight")
+    plt.close(fig)
+
+
+# ================================================================
 # FUTURE PLOTS  (not yet implemented)
 # ================================================================
 #
